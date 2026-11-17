@@ -1,0 +1,1322 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Maille">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#fbf8fa">
+<title>Maille</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+  html,body{margin:0;background:#fbf8fa;font-family:'DM Sans',sans-serif;overscroll-behavior:none}
+  @media (prefers-color-scheme: dark){html,body{background:#1c1820}}
+  body{-webkit-tap-highlight-color:transparent}
+  a{color:#b0407a}a:hover{color:#8a2d5e}
+  *{box-sizing:border-box}
+  textarea,input,button{font-family:inherit}
+  .scr::-webkit-scrollbar{width:0;height:0}
+  .scr{scrollbar-width:none}
+  input[type=date]{color-scheme:light dark}
+  @keyframes mpulse{0%,100%{opacity:.35}50%{opacity:1}}
+  /* hover states from the design (style-hover) */
+  .lift{transition:transform .15s}
+  .lift:hover{transform:translateY(-2px)}
+  .hov{background:var(--bg)}
+  .hov:hover{background:var(--hbg)}
+</style>
+<!-- React 18.3.1 + Babel 7.26.4 copied locally (vendor/) so the app works offline.
+     No build step: the JSX below is compiled in the browser. -->
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+// ─────────────────────────────────────────────────────────────
+//  Maille : appli de patterns crochet
+//  Données enregistrées dans le navigateur (localStorage).
+// ─────────────────────────────────────────────────────────────
+
+// Style helper: lets the markup keep the design's CSS strings as-is.
+const _styleCache = new Map();
+function s(css, extra) {
+  let o = _styleCache.get(css);
+  if (!o) {
+    o = {}; const parts = []; let depth = 0, buf = '';
+    for (const ch of css) {
+      if (ch === '(') depth++; else if (ch === ')') depth--;
+      if (ch === ';' && depth === 0) { parts.push(buf); buf = ''; } else buf += ch;
+    }
+    parts.push(buf);
+    for (const p of parts) {
+      const i = p.indexOf(':'); if (i < 0) continue;
+      const k = p.slice(0, i).trim(), val = p.slice(i + 1).trim(); if (!k) continue;
+      o[k.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = val;
+    }
+    if (_styleCache.size > 3000) _styleCache.clear();
+    _styleCache.set(css, o);
+  }
+  return extra ? { ...o, ...extra } : o;
+}
+
+const CATS = { Amigurumi: 350, 'Vêtement': 295, 'Déco': 165, Accessoire: 80, Couverture: 235 };
+const LSC = 'maille-v4-cats';
+const hueOf = name => { let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+const DIFF = ['', 'Facile', 'Moyen', 'Avancé'];
+const LSP = 'maille-v4-patterns', LSJ = 'maille-v4-projects';
+function progInfo(prog, parts) {
+  prog = prog || {}; let done = 0, total = 0;
+  parts.forEach((pt, i) => { total += pt.steps.length; done += Math.min(prog[i] || 0, pt.steps.length); });
+  const pct = total ? Math.round(done / total * 100) : 0;
+  return { done, total, pct, line: done === 0 ? 'Pas commencé' : done >= total ? 'Terminé ✓' : done + '/' + total + ' tours · ' + pct + ' %' };
+}
+function dsl(src) {
+  return src.trim().split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    if (l.startsWith('## ')) return { type: 'section', text: l.slice(3) };
+    if (l.startsWith('> ')) return { type: 'note', text: l.slice(2) };
+    const [label, text, count] = l.split('|').map(x => x.trim());
+    return { type: 'row', label, text, count: count || '' };
+  });
+}
+function rowSteps(label) {
+  const m = label.match(/^([A-Za-z]+)\s*(\d+)[a-z]?\s*[–-]\s*(\d+)$/);
+  if (m) { const a = +m[2], b = +m[3]; if (b > a) return Array.from({ length: b - a + 1 }, (_, i) => m[1] + (a + i)); }
+  return [label];
+}
+function buildParts(rows) {
+  const parts = []; let part = null;
+  rows.forEach(r => {
+    if (r.type === 'section') { part = { name: r.text, items: [], steps: [] }; parts.push(part); return; }
+    if (!part) { part = { name: 'Pattern', items: [], steps: [] }; parts.push(part); }
+    if (r.type === 'note') { part.items.push({ ...r }); return; }
+    const st = rowSteps(r.label);
+    part.items.push({ ...r, offset: part.steps.length, n: st.length, stepLabels: st });
+    st.forEach((label, j) => part.steps.push({ label, row: r, j, n: st.length }));
+  });
+  return parts;
+}
+
+// ── Données de démo ──
+const OWN = [
+  { id: 'o1', name: 'Petite baleine', designer: 'Lina Moreau', category: 'Amigurumi', hook: '3 mm', size: '9 cm', diff: 1, yarns: [['bleu ciel', '#8ec5ea']], rows: dsl(`
+## Corps
+T1 | En bleu ciel, 6 ms dans un CM | 6
+T2 | 6 aug | 12
+T3 | *1 ms, 1 aug* x6 | 18
+T4 | *2 ms, 1 aug* x6 | 24
+T5 | *3 ms, 1 aug* x6 | 30
+T6–10 | 30 ms | 30
+> Placer les yeux de sécurité entre T8 et T9, 6 m d'écart.
+T11 | *3 ms, 1 dim* x6 | 24
+T12 | *2 ms, 1 dim* x6 | 18
+T13 | *1 ms, 1 dim* x6 | 12
+> Rembourrer fermement.
+T14 | 6 dim | 6
+## Queue
+T1 | 6 ms dans un CM | 6
+T2 | *1 ms, 1 aug* x3 | 9
+T3–5 | 9 ms | 9`) },
+  { id: 'o2', name: 'Cardigan Pâquerette', designer: 'Atelier Nuage', category: 'Vêtement', hook: '5 mm', size: 'T38', diff: 2, yarns: [['écru', '#efe6d2']], rows: dsl(`
+## Dos
+R1 | 62 ml, 1 ms dans la 2e ml et chaque ml | 61
+R2 | 1 ml, tourner, 1 ms dans chaque m | 61
+R3–40 | Répéter R2 | 61
+## Devants (x2)
+R1 | 32 ml, 1 ms dans la 2e ml et chaque ml | 31
+R2–38 | 1 ml, tourner, 1 ms dans chaque m | 31`) },
+  { id: 'o3', name: 'Sous-verres arc-en-ciel', designer: 'Mes créations', category: 'Déco', hook: '4 mm', size: '10 cm', diff: 1, yarns: [['rose', '#f4a3c0'], ['jaune', '#f5d76e'], ['menthe', '#8fd6b4']], rows: dsl(`
+T1 | En rose, 12 br dans un CM, fermer par 1 mc | 12
+T2 | En jaune, 3 ml, 1 br dans la même m, 2 br dans chaque m | 24
+T3 | *1 br, 2 br dans la m suiv.* x12 | 36
+T4 | En menthe, 1 ms dans chaque m, arrêter | 36`) },
+];
+const KIT = 'Ricorumi Shrooom', KITD = 'Andreia Ferreira · Rico';
+const SHROOOM = [
+  { id: 's-frog', page: 25, name: 'Grenouille', category: 'Amigurumi', hook: '2,5 mm', size: '3 cm', diff: 2, yarns: [['vert', '#6fbf4a'], ['vanille', '#f4e4b0'], ['noir', '#2a2233']], rows: dsl(`
+## Corps
+> Travailler en spirale, rembourrer au fur et à mesure.
+T1 | En vert, 6 ms dans un CM | 6
+T2 | 6 aug | 12
+T3 | *1 ms, 1 aug* x6 | 18
+T4 | 6 ms, 1 bobble, 4 ms, 1 bobble, 6 ms | 18
+T5 | 5 ms, 1 aug, 6 ms, 1 aug, 4 ms, 1 aug | 21
+T6–9 | 21 ms | 21
+T10 | 2 ms, 1 dim, 1 puff, 2 ms, 1 puff, 1 ms, 1 dim, 1 ms, 1 puff, 2 ms, 1 puff, 1 dim, 3 ms | 18
+> Finir de rembourrer.
+T11 | 9 dim | 9
+> Arrêter en laissant un long fil, le passer dans les brins avant des 9 m restantes et serrer.
+## Ventre
+T1 | En vanille, 6 ms dans un CM | 6
+T2 | 6 aug | 12
+> Coudre sur le corps entre T7 et T9, entre les puffs.
+## Finitions
+> En noir, broder les yeux sur les bobbles : 2 traits horizontaux par œil.`) },
+  { id: 's-beetle', page: 25, name: 'Scarabée', category: 'Amigurumi', hook: '2,5 mm', size: '4 cm', diff: 2, yarns: [['papaye', '#f08a5d'], ['crème', '#f5efe0'], ['vanille', '#f4e4b0']], rows: dsl(`
+## Corps
+> Travailler en spirale, rembourrer au fur et à mesure.
+T1 | En papaye, 8 ms dans un CM | 8
+T2 | 8 aug | 16
+T3–4 | 16 ms | 16
+> Les 2 tours suivants se travaillent tous deux sur T4.
+T5a | Brin avant, 16 ms | 16
+T5b | En crème, brin arrière, 16 ms | 16
+T6–10 | 16 ms | 16
+T11 | 8 dim | 8
+> Arrêter, passer le fil dans les brins avant des 8 m et serrer.
+## Pattes (x6)
+R1 | En papaye, 4 ml |
+> Coudre de chaque côté : 2 entre T4 et T5a, 2 entre T7 et T8, 2 entre T9 et T10, 8 m d'écart.
+## Élytres (x2)
+> 4 ml + 1 ml tournante, tourner. Travailler des deux côtés de la chaînette.
+R1 | En vanille, 1 ms dans la 2e ml, 2 ms, 4 ms dans la m suiv., de l'autre côté : 3 ms, 1 ml, tourner | 10
+R2 | 3 ms, 4 aug, 3 ms | 14
+> Coudre côte à côte entre T5b et T6.
+## Finitions
+> Antennes : un brin de papaye noué de chaque côté, entre T2 et T3.`) },
+  { id: 's-girolle', page: 29, name: 'Girolle', category: 'Déco', hook: '3 mm', size: '3,5 cm', diff: 1, yarns: [['moutarde', '#d9a72b']], rows: dsl(`
+## Pied
+> Travailler en spirale, rembourrer au fur et à mesure.
+T1 | En moutarde, 6 ms dans un CM | 6
+T2–5 | 6 ms | 6
+T6 | *1 ms, 1 aug* x3 | 9
+T7 | *2 ms, 1 aug* x3 | 12
+T8 | *1 ms, 1 aug* x6 | 18
+## Chapeau
+T1 | En moutarde, 6 ms dans un CM | 6
+T2 | 6 aug | 12
+T3 | *1 ms, 1 aug* x6 | 18
+> Le tour suivant se travaille à travers T3 du chapeau et T8 du pied.
+T4 | 18 aug | 36
+T5 | *1 ms, 1 aug* x18 | 54`) },
+  { id: 's-funny', page: 27, name: 'Champignon rigolo', category: 'Déco', hook: '3 mm', size: '7,5 cm', diff: 2, yarns: [['lilas', '#c6a7e0'], ['turquoise', '#3fbfbf'], ['rose fluo', '#ff5fa2'], ['vert fluo', '#9be84a']], rows: dsl(`
+## Pied
+> Travailler en spirale, rembourrer au fur et à mesure.
+T1 | En lilas, 6 ms dans un CM | 6
+T2 | 6 aug | 12
+T3 | Brin avant, 12 ms | 12
+T4–6 | 12 ms | 12
+T7 | *4 ms, 1 dim* x2 | 10
+T8 | 10 ms | 10
+T9 | Brin arrière, 10 ms | 10
+T10 | *3 ms, 1 dim* x2 | 8
+T11 | 8 ms | 8
+T12 | En rose fluo, brin avant, 8 aug | 16
+T13 | *3 ms, 1 aug* x4 | 20
+T14 | *4 ms, 1 aug* x4 | 24
+> Enfoncer T1 et T2 pour aplatir le fond.
+## Collerette
+> En rose fluo, joindre dans le brin avant de la 1re m de T8 du pied.
+T1 | Brin avant, *1 ms, 2 ml* x10 | 10
+## Chapeau
+T1 | En turquoise, 6 ms dans un CM | 6
+T2 | 6 ms | 6
+T3 | En lilas, *2 ms, 1 aug* x2 | 8
+T4 | 8 ms | 8
+T5 | En turquoise, *1 ms, 1 aug* x4 | 12
+T6 | *3 ms, 1 aug* x3 | 15
+T7 | En lilas, 1 ms, 1 aug, *4 ms, 1 aug* x2, 3 ms | 18
+T8 | *2 ms, 1 aug* x6 | 24
+T9–10 | En turquoise, 24 ms | 24
+T11–12 | En lilas, 24 ms | 24
+T13 | En turquoise, 24 ms | 24
+> Le tour suivant se travaille à travers T13 du chapeau et T14 du pied.
+T14 | *1 ms, 2 ml* x24 | 24
+## Finitions
+> En vert fluo, broder de la mousse sur le pied : quelques traits verticaux sur T3 à T5.`) },
+  { id: 's-snail', page: 30, name: 'Escargot', category: 'Amigurumi', hook: '2,5 mm', size: '8 cm', diff: 3, yarns: [['crème', '#f5efe0'], ['moutarde', '#d9a72b'], ['chocolat', '#6b3f2a']], rows: dsl(`
+## Corps
+> En crème, 20 ml + 1 ml tournante, tourner. Travailler en spirale des deux côtés de la chaînette.
+T1 | En crème, 1 ms dans la 2e ml, 8 ms, 10 demi-br, 4 demi-br dans la m suiv., de l'autre côté : 10 demi-br, 9 ms | 42
+T2 | 17 ms, 1 picot, 3 ms, *4 ml, 1 mc dans la 2e ml, 2 mc, 3 ms* x2, 1 picot, 16 ms |
+> Les picots et ml ne comptent pas : passer dessous au tour suivant.
+T3 | 42 ms | 42
+> Coudre l'ouverture à points de surjet, glisser le cure-pipe avant de fermer.
+## Coquille
+T1 | En moutarde, 6 ms dans un CM | 6
+T2 | 6 ms | 6
+T3–4 | En chocolat, 6 ms | 6
+T5 | En moutarde, 5 ms, 1 aug | 7
+T6 | 7 ms | 7
+T7–8 | En chocolat, 7 ms | 7
+T9 | En moutarde, 6 ms, 1 aug | 8
+T10 | 8 ms | 8
+T11–12 | En chocolat, 8 ms | 8
+T13 | En moutarde, 7 ms, 1 aug | 9
+T14 | 9 ms | 9
+T15–16 | En chocolat, 9 ms | 9
+T17 | En moutarde, 8 ms, 1 aug | 10
+T18 | 10 ms | 10
+> Rouler la coquille sur elle-même, fixer par quelques points, rembourrer T15 à T18 et coudre sur le corps.`) },
+  { id: 's-maple', page: 24, name: 'Feuille d’érable', category: 'Déco', hook: '2,5 mm', size: '3,5 cm', diff: 2, yarns: [['renard', '#c8642e'], ['safran', '#e8a33a'], ['papaye', '#f08a5d']], rows: dsl(`
+## Feuille
+T1 | En renard, 6 ms dans un CM | 6
+> Continuer en spirale.
+T2 | 6 aug | 12
+T3 | 1 ms, [1 demi-br, 2 ml, 1 demi-br] dans la m suiv., 1 mc, [1 br, 2 ml, 1 br] dans la m suiv., 1 mc, [2 br, 2 ml, 2 br] dans la m suiv., 1 mc, [1 br, 2 ml, 1 br] dans la m suiv., 1 mc, [1 demi-br, 2 ml, 1 demi-br] dans la m suiv., 2 mc, 2 ml + 1 ml tournante, tourner, 1 mc dans la 2e ml, 1 mc | 21
+> 1 mc dans la 1re m pour terminer. Arrêter et rentrer le fil.`) },
+].map(p => ({ ...p, designer: KITD, kit: KIT }));
+
+const PROJ0 = [
+  { id: 'j1', patternId: 'o1', prog: { 0: 7, 1: 1 }, activePart: 0, touched: 2, title: 'Baleine pour bébé Inès', forWhom: 'Inès', due: '2026-12-20', status: 'doing', start: '2026-11-02', end: '', hours: 3, description: '', photo: '', comments: [{ d: '2026-11-10', text: 'Yeux posés un peu trop bas, à surveiller pour la prochaine.' }] },
+  { id: 'j8', patternId: 'o1', prog: {}, title: 'Baleine pour Noé', forWhom: 'Noé', due: '2027-01-20', status: 'todo', start: '', end: '', hours: '', description: '', photo: '', comments: [] },
+  { id: 'j2', patternId: 'o2', title: '', forWhom: 'Moi', due: '2027-02-15', status: 'todo', start: '', end: '', hours: '', description: '', photo: '', comments: [] },
+  { id: 'j3', patternId: null, title: 'Réparer le bonnet de Jules', forWhom: 'Jules', due: '2026-11-30', status: 'todo', start: '', end: '', hours: '', description: 'Recoudre le pompon et reprendre les 2 derniers rangs de côtes (fil marine, crochet 4 mm).', photo: '', comments: [] },
+  { id: 'j4', patternId: 'o3', prog: { 0: 4 }, title: 'Sous-verres pour Maman', forWhom: 'Maman', due: '', status: 'done', start: '2026-09-03', end: '2026-09-10', hours: 4, description: '', photo: '', comments: [{ d: '2026-09-10', text: 'Faire 6 la prochaine fois, 4 c’est trop peu.' }] },
+  { id: 'j5', patternId: null, title: 'Doudou lapin', forWhom: 'Camille', due: '', status: 'done', start: '2026-07-12', end: '2026-08-01', hours: 14, description: 'Lapin aux longues oreilles, coton rose poudré.', photo: '', comments: [] },
+  { id: 'j6', patternId: null, title: 'Bob d’été', forWhom: 'Moi', due: '', status: 'done', start: '2026-06-01', end: '2026-06-09', hours: 7, description: 'Raphia naturel, 4,5 mm.', photo: '', comments: [] },
+  { id: 'j7', patternId: null, title: 'Tote bag granny', forWhom: 'Lucie', due: '', status: 'done', start: '2026-10-05', end: '2026-10-26', hours: 11, description: '', photo: '', comments: [] },
+];
+
+const GLOSS = [
+  { fr: 'ml', name: 'maille en l’air', us: 'ch', uk: 'ch', desc: 'Un jeté tiré à travers la boucle du crochet. Base des chaînettes.' },
+  { fr: 'mc', name: 'maille coulée', us: 'sl st', uk: 'sl st', desc: 'La maille la plus basse : pour fermer un tour ou se déplacer sans hauteur.' },
+  { fr: 'ms', name: 'maille serrée', us: 'sc', uk: 'dc', warn: 1, desc: 'Le point des amigurumis. Attention : en britannique, « dc » veut dire maille serrée !' },
+  { fr: 'demi-br', name: 'demi-bride', us: 'hdc', uk: 'htr', desc: '1 jeté, piquer, tirer une boucle, puis écouler les 3 boucles d’un coup.' },
+  { fr: 'br', name: 'bride', us: 'dc', uk: 'tr', warn: 1, desc: '1 jeté, piquer, tirer une boucle, écouler 2 par 2 deux fois. « dc » américain = bride.' },
+  { fr: 'dB', name: 'double bride', us: 'tr', uk: 'dtr', desc: '2 jetés, puis écouler les boucles 2 par 2 trois fois.' },
+  { fr: 'aug', name: 'augmentation', us: 'inc · 2 sc in next st', uk: '2 dc into next st', desc: '2 mailles dans la même maille.' },
+  { fr: 'dim', name: 'diminution', us: 'sc2tog · dec', uk: 'dc2tog', desc: '2 mailles écoulées ensemble. La « dim invisible » se fait dans les brins avant.' },
+  { fr: 'CM', name: 'cercle magique', us: 'magic ring (MR)', uk: 'magic ring', desc: 'Boucle ajustable pour démarrer un tour sans trou au centre.' },
+  { fr: 'BAv', name: 'brin avant seulement', us: 'FLO', uk: 'FLO', desc: 'Piquer uniquement dans le brin le plus proche de vous. Laisse une ligne en relief.' },
+  { fr: 'BAr', name: 'brin arrière seulement', us: 'BLO', uk: 'BLO', desc: 'Piquer uniquement dans le brin le plus éloigné. Crée une arête, utile pour les fonds plats.' },
+  { fr: 'bobble', name: 'bobble (4 br fermées ensemble)', us: '4-dc bobble', uk: '4-tr bobble', desc: '4 brides non terminées dans la même maille, puis 1 jeté à travers les 5 boucles.' },
+  { fr: 'puff', name: 'point puff (4 demi-br)', us: '4-hdc puff', uk: '4-htr puff', desc: '4 fois (jeté, piquer, tirer une boucle) dans la même maille, puis écouler les 9 boucles.' },
+  { fr: 'picot', name: 'picot', us: 'picot', uk: 'picot', desc: 'Petite boucle décorative : quelques ml refermées par 1 mc.' },
+  { fr: 'ml t.', name: 'maille tournante', us: 'turning ch', uk: 't-ch', desc: 'Maille(s) en l’air en début de rang pour monter à la bonne hauteur.' },
+];
+
+// ── Conversion UK / US → FR ──
+const COMMON = [['working into a magic ring', 'dans un CM'], ['into a magic ring', 'dans un CM'], ['in a magic ring', 'dans un CM'], ['in magic ring', 'dans un CM'], ['magic ring', 'CM'], ['cont working in a spiral', 'continuer en spirale'], ['fill with stuffing as you go along', 'rembourrer au fur et à mesure'], ['fasten off', 'arrêter'], ['break yarn', 'couper le fil'], ['weave in end', 'rentrer le fil'], ['change yarn', 'changer de fil'], ['stuff firmly', 'rembourrer fermement'], ['stuff', 'rembourrer'], ['sl st', 'mc'], ['slst', 'mc'], ['t-ch', 'ml tournante'], ['ch', 'ml'], ['inc', 'aug'], ['dec', 'dim'], ['flo', 'brin avant'], ['blo', 'brin arrière'], ['sts', 'm'], ['st', 'm'], ['rep', 'répéter'], ['times', 'fois'], ['around', 'tout le tour'], ['each', 'chaque'], ['across', 'jusqu’au bout'], ['turn', 'tourner'], ['from hook', 'du crochet'], ['mr', 'CM']];
+const GRAM = [['leaving a long tail', 'en laissant un long fil'], ['in', 'dans'], ['into', 'dans'], ['and', 'et'], ['same', 'même'], ['next', 'suiv.'], ['then', 'puis'], ['with', 'avec'], ['the', 'la'], ['of', 'de'], ['1st', '1re'], ['2nd', '2e'], ['3rd', '3e'], ['remaining', 'restantes'], ['rem', 'rest.'], ['make', 'faire'], ['skip', 'sauter'], ['on', 'sur'], ['to', 'à']];
+const TERMS = { uk: [['dc2tog', 'dim'], ['htr', 'demi-br'], ['dtr', 'dB'], ['tr', 'br'], ['dc', 'ms']], us: [['sc2tog', 'dim'], ['hdc', 'demi-br'], ['sc', 'ms'], ['dc', 'br'], ['tr', 'dB']] };
+function mkConv(term) {
+  const list = [...TERMS[term], ...COMMON].map(d => [...d, 0]).concat(GRAM.map(d => [...d, 1]));
+  const map = {}; list.forEach(([k, v, g]) => { map[k] = { v, g }; });
+  const re = new RegExp('\\b(' + list.map(d => d[0]).sort((a, b) => b.length - a.length).map(x => x.replace(/[-]/g, '\\-').replace(/ /g, '\\s+')).join('|') + ')\\b', 'gi');
+  return { map, re };
+}
+const CONV = { uk: mkConv('uk'), us: mkConv('us') };
+function convertParts(text, term) {
+  if (term === 'fr') {
+    const out = []; let last = 0, m; const re = /m\.\s?[slc](?:\.|\b)|\baug\.|\bdim\.|demi-?br\.|\bbr\.|cercle magique/gi;
+    const map = tx => { const k = tx.toLowerCase().replace(/\s/g, ''); const kk = k.replace(/\.?$/, '.'); return kk === 'm.s.' ? 'ms' : kk === 'm.l.' ? 'ml' : kk === 'm.c.' ? 'mc' : k === 'aug.' ? 'aug' : k === 'dim.' ? 'dim' : k === 'br.' ? 'br' : k.startsWith('demi') ? 'demi-br' : 'CM'; };
+    while ((m = re.exec(text))) { if (m.index > last) out.push({ text: text.slice(last, m.index), hl: false }); out.push({ text: map(m[0]), hl: true }); last = m.index + m[0].length; }
+    if (last < text.length) out.push({ text: text.slice(last), hl: false });
+    return out;
+  }
+  const base = term === 'uk' ? 'dc' : 'sc';
+  text = text.replace(new RegExp('\\[2 ' + base + ' (?:into|in) next st\\]\\s*(\\d+)\\s*times', 'gi'), '$1 inc')
+    .replace(new RegExp('\\b2 ' + base + ' (?:into|in) next st\\b', 'gi'), '1 inc')
+    .replace(/\[([^\]]+)\]\s*(\d+)\s*times/gi, '*$1* x$2').replace(/^In ([a-z ]+),/i, 'En $1,');
+  const { map, re } = CONV[term];
+  const out = []; let last = 0; let m; re.lastIndex = 0;
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), hl: false });
+    const e = map[m[0].toLowerCase().replace(/\s+/g, ' ')];
+    out.push({ text: e ? e.v : m[0], hl: e ? !e.g : false });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), hl: false });
+  return out;
+}
+const LABEL_RE = /^(rnds?|rounds?|rows?|rangs?|rgs?|tours?|trs?|r|t)\s*(\d+[a-z]?)(?:\s*(?:[-–]|à|et)\s*(\d+))?\s*[:.)]\s*/i;
+function reflow(text) {
+  const out = [];
+  text.split('\n').map(l => l.trim()).filter(Boolean).forEach(l => {
+    const prev = out[out.length - 1];
+    const start = LABEL_RE.test(l) || (/[A-Z]{3}/.test(l) && l === l.toUpperCase()) || !prev || /[.:)]$/.test(prev);
+    if (start) out.push(l); else out[out.length - 1] = prev + ' ' + l;
+  });
+  return out.join('\n');
+}
+const PEAS = `POIS × 4
+En vert clair.
+Tr 1 : 6 m. s. dans 1 cercle magique (6 m.).
+Tr 2 : 6 aug. (12 m.).
+Trs 3 et 4 : 12 m. s. (12 m.).
+Tr 5 : 6 dim. (6 m.).
+Rembourrer fermement. Fermer et rentrer le fil.
+COSSE
+En vert foncé.
+Tr 1 : Faire 1 chaînette de 18 m. l., 1 m. s. dans la 2e m. en partant du crochet (marquer cette m. comme la 1re m. du tr), 15 m. s. le long de la chaînette, 3 m. s. dans la dernière m. de la chaînette, puis en remontant de l'autre côté de la chaînette : 15 m. s., 1 aug. dans la dernière m. (36 m.).
+Tr 2 : 1 aug., 15 m. s., 1 aug., 1 m. s., 1 aug., 15 m. s., 1 aug., 1 m. s. (40 m.).
+Tr 3 : 1 aug., 17 m. s., 3 aug., 17 m. s., 2 aug. (46 m.).
+Tr 4 : 21 m. s., 2 aug., 21 m. s., 2 aug. (50 m.).
+Tr 5 : 50 m. s. (50 m.).
+Tr 6 : 48 m. s., 1 m. c. Aplatir la cosse de façon à ce que cette 49e m. soit à une extrémité. La dernière m. du tr doit être faite en crochetant les 2 épaisseurs ensemble : piquer le crochet dans la m. suivante (la 50e du tr 5) et dans la m. précédente (la 48e du tr 6, de l'arrière vers l'avant) et faire 1 m. c. (50 m.).
+Tr 7 : Faire 2 autres m. c. en crochetant les 2 épaisseurs ensemble ; continuer en crochetant 1 seule épaisseur de la cosse : 18 m. c., 3 m. s., 1 m. c. ; crocheter à nouveau les 2 épaisseurs ensemble : piquer le crochet dans la m. suivante (la 25e du tr 6) et dans la m. précédente (la 23e du tr 7, de l'arrière vers l'avant) et faire 1 m. c., faire 2 m. c. supplémentaires de cette façon ; finir le tr en crochetant 1 seule épaisseur de la cosse : 18 m. c.
+Arrêter le fil sur l'envers de la cosse.
+TIGE
+En vert foncé. Les explications sont décomposées en 3 parties mais il faut tout crocheter à la suite avec le même fil.
+Laisser 15 cm de fil au démarrage avant le nœud coulant.`;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; sc.onload = () => res(window.Tesseract); sc.onerror = rej; document.head.appendChild(sc); });
+}
+function parse(raw, term) {
+  const items = [];
+  raw.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+    const m = line.match(LABEL_RE);
+    if (m) {
+      const isRow = /^(row|rang|rg|r$)/i.test(m[1]);
+      const label = (isRow ? 'R' : 'T') + m[2] + (m[3] ? '–' + m[3] : '');
+      let body = line.slice(m[0].length), count = '';
+      const c = body.match(/\s*\((\d+)\s*(?:m\.?|sts?|m)?\)\s*\.?$/i) || body.match(/[.,]?\s*(\d+)\s*sts?\.?\s*$/i);
+      if (c) { count = +c[1]; body = body.slice(0, c.index); }
+      body = body.replace(/\.\s*$/, '');
+      const parts = convertParts(body, term);
+      items.push({ type: 'row', label, count, parts, text: parts.map(p => p.text).join('') });
+    } else if (/:$/.test(line) || (/[A-Z]/.test(line) && line === line.toUpperCase())) {
+      const parts = convertParts(line.replace(/:$/, ''), term);
+      const tx = parts.map(p => p.text).join('');
+      items.push({ type: 'section', parts, text: tx.charAt(0).toUpperCase() + tx.slice(1).toLowerCase() });
+    } else {
+      const parts = convertParts(line, term);
+      const tx = parts.map(p => p.text).join('');
+      items.push({ type: 'note', parts, text: tx.charAt(0).toUpperCase() + tx.slice(1) });
+    }
+  });
+  return items;
+}
+const EXAMPLE = `BODY
+Rnd 1: In green, working into a magic ring, 6 dc.
+Rnd 2: [2 dc into next st] 6 times. 12 sts.
+Rnd 3: [1 dc, 2 dc into next st] 6 times. 18 sts.
+Rnds 4 – 6: 18 dc.
+Rnd 7: [1 dc, dc2tog] 6 times. 12 sts.
+Stuff firmly.
+Rnd 8: [dc2tog] 6 times. 6 sts.
+Fasten off and break yarn, leaving a long tail.`;
+const PDF_SAMPLE = 'Rnd 3: [1 dc, 2 dc into next st] 6 times. 18 sts.';
+const emptyDraft = () => ({ name: '', designer: '', hook: '', category: 'Amigurumi', diff: 1, raw: '' });
+const today = () => new Date().toISOString().slice(0, 10);
+const fmtD = d => d ? new Date(d + 'T12:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+const fmtShort = d => d ? new Date(d + 'T12:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '';
+const daysUntil = d => Math.round((new Date(d + 'T12:00') - new Date(today() + 'T12:00')) / 86400000);
+
+const TrashIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M6 7l1 13h10l1-13"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>
+  </svg>
+);
+
+class App extends React.Component {
+  constructor(props) {
+    super(props);
+    // Light / dark follows the phone's own setting.
+    this.darkMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+    const dark = !!(this.darkMq && this.darkMq.matches);
+    this.state = { patterns: [...OWN], projects: PROJ0, screen: 'library', from: 'library', ctxProj: null, openId: 'o1', projId: 'j1', projTab: 'todo', fil: { fav: false, cats: [], diffs: [], srcs: [] }, cats: Object.keys(CATS), query: '', dark, partSel: null,
+      imp: { step: 'choose', phase: 0, term: 'uk', sel: Object.fromEntries(SHROOOM.map(p => [p.id, true])) }, draft: emptyDraft(), term: 'uk', tab: 'source', gq: '', gOpen: 'ms', commentDraft: '' };
+    this.fileRef = React.createRef();
+  }
+  componentDidMount() {
+    if (this.darkMq) this.darkMq.addEventListener('change', this.onScheme);
+    this.syncThemeColor();
+    try { const x = JSON.parse(localStorage.getItem(LSP)); if (Array.isArray(x) && x.length) this.setState({ patterns: x }); } catch (e) {}
+    try { const x = JSON.parse(localStorage.getItem(LSJ)); if (Array.isArray(x)) this.setState({ projects: x }); } catch (e) {}
+    try { const x = JSON.parse(localStorage.getItem(LSC)); if (Array.isArray(x) && x.length) this.setState({ cats: x }); } catch (e) {}
+  }
+  componentWillUnmount() { clearInterval(this.timer); if (this.darkMq) this.darkMq.removeEventListener('change', this.onScheme); }
+  componentDidUpdate(_, ps) { if (ps.dark !== this.state.dark) this.syncThemeColor(); }
+  onScheme = e => this.setState({ dark: e.matches });
+  syncThemeColor() { const tc = document.querySelector('meta[name=theme-color]'); if (tc) tc.content = this.state.dark ? '#1c1820' : '#fbf8fa'; }
+  persist(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { console.warn('Stockage plein', e); } }
+  setPatterns(fn) { this.setState(st => { const patterns = fn(st.patterns); this.persist(LSP, patterns); return { patterns }; }); }
+  setProjects(fn) { this.setState(st => { const projects = fn(st.projects); this.persist(LSJ, projects); return { projects }; }); }
+  updPattern(id, fn) { this.setPatterns(ps => ps.map(p => p.id === id ? fn(p) : p)); }
+  updProject(id, o) { this.setProjects(ps => ps.map(p => p.id === id ? { ...p, ...(typeof o === 'function' ? o(p) : o) } : p)); }
+  setDraft(k) { return e => { const v = e.target.value; this.setState(st => ({ draft: { ...st.draft, [k]: v } })); }; }
+  setImp(o) { this.setState(st => ({ imp: { ...st.imp, ...o } })); }
+  pick(target) { this.photoTarget = target; this.fileRef.current && this.fileRef.current.click(); }
+  onFile = e => {
+    const f = e.target.files && e.target.files[0]; const target = this.photoTarget; e.target.value = '';
+    if (!f || !target) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const k = Math.min(1, (target.kind === 'ocr' ? 1800 : 640) / Math.max(img.width, img.height));
+        const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        const url = c.toDataURL('image/jpeg', 0.78);
+        if (target.kind === 'ocr') { this.setImp({ photo: { src: url, rot: 0, w: c.width, h: c.height }, reading: false, err: '' }); return; }
+        if (target.kind === 'pattern') this.updPattern(target.id, p => ({ ...p, cover: url }));
+        else this.updProject(target.id, { photo: url });
+      };
+      img.src = rd.result;
+    };
+    rd.readAsDataURL(f);
+  };
+  async readPhoto() {
+    const ph = this.state.imp.photo; if (!ph) return;
+    this.setImp({ reading: true, progress: 0, err: '' });
+    const done = text => this.setState(st => ({ imp: { ...st.imp, reading: false, step: 'paste' }, term: 'fr', tab: 'preview',
+      draft: { ...emptyDraft(), raw: text, cover: ph.src, name: ph.example ? 'Les petits pois' : '', designer: ph.example ? 'Livre · p. 50' : '', hook: ph.example ? '2,5 mm' : '', category: 'Déco', yarns: ph.example ? [['vert clair', '#9ccf6a'], ['vert foncé', '#3f8a3a']] : [] } }));
+    if (ph.example) {
+      clearInterval(this.timer);
+      this.timer = setInterval(() => { const p = Math.min(100, (this.state.imp.progress || 0) + 9); this.setImp({ progress: p }); if (p >= 100) { clearInterval(this.timer); done(PEAS); } }, 120);
+      return;
+    }
+    try {
+      const T = await loadTesseract();
+      const img = new Image(); img.src = ph.src; await img.decode();
+      const r = ((ph.rot % 360) + 360) % 360, sw = r % 180 ? img.height : img.width, sh = r % 180 ? img.width : img.height;
+      const c = document.createElement('canvas'); c.width = sw; c.height = sh; const x = c.getContext('2d');
+      x.translate(sw / 2, sh / 2); x.rotate(r * Math.PI / 180); x.drawImage(img, -img.width / 2, -img.height / 2);
+      const res = await T.recognize(c, 'fra', { logger: m => { if (m.status === 'recognizing text') this.setImp({ progress: Math.round(m.progress * 100) }); } });
+      done(reflow(res.data.text));
+    } catch (e) { this.setImp({ reading: false, err: 'La lecture a échoué (connexion ?). Réessayez, ou collez le texte à la main.' }); }
+  }
+  startPdf() {
+    this.setImp({ step: 'pdf', phase: 0 }); clearInterval(this.timer);
+    this.timer = setInterval(() => { const ph = this.state.imp.phase + 1; this.setImp({ phase: ph }); if (ph >= 3) clearInterval(this.timer); }, 750);
+  }
+  addCategory(apply) { this.newCatApply = apply; this.setState({ newCat: { open: true, value: '' } }); }
+  commitCategory() {
+    const name = ((this.state.newCat || {}).value || '').trim(); const apply = this.newCatApply;
+    this.setState({ newCat: { open: false, value: '' } });
+    if (!name) return;
+    this.setState(st => { const cats = st.cats.includes(name) ? st.cats : [...st.cats, name]; this.persist(LSC, cats); return { cats }; });
+    apply && apply(name);
+  }
+  newProject(patternId, status) {
+    const id = 'j' + Date.now();
+    this.setProjects(ps => [{ id, prog: {}, patternId: patternId || null, title: '', forWhom: '', due: '', status: status || 'todo', start: status === 'doing' ? today() : '', end: status === 'done' ? today() : '', hours: '', description: '', photo: '', comments: [], isNew: true }, ...ps]);
+    this.setState({ screen: 'project', projEdit: true, projId: id, projTab: status === 'done' ? 'done' : 'todo', commentDraft: '' });
+  }
+
+  // View model: everything the markup needs, computed from state.
+  renderVals() {
+    const { dark, patterns, projects, fil, cats, query, screen, draft, term, tab, imp, gq, gOpen, projTab, commentDraft } = this.state;
+    const t = dark
+      ? { page: '#141117', bg: '#1c1820', surface: '#27222c', chip: '#302a36', ink: '#f5f0f7', muted: '#aaa1b4', pillOnTint: 'rgba(0,0,0,.22)', mutedOnTint: '#d9cfe0', shadow: 'rgba(0,0,0,.6)', bar: 'rgba(28,24,32,.92)' }
+      : { page: '#ece6ef', bg: '#fbf8fa', surface: '#ffffff', chip: '#f1ecf3', ink: '#2a2233', muted: '#756c80', pillOnTint: 'rgba(255,255,255,.6)', mutedOnTint: '#5b5266', shadow: 'rgba(70,40,90,.35)', bar: 'rgba(251,248,250,.92)' };
+    const tint = h => dark ? `oklch(0.37 0.07 ${h})` : `oklch(0.91 0.065 ${h})`;
+    const strong = h => `oklch(0.75 0.15 ${h})`;
+    const accent = strong(350);
+    const dots = n => '●'.repeat(n) + '○'.repeat(3 - n);
+
+    const deco = p => {
+      const h = CATS[p.category] ?? hueOf(p.category || '');
+      const parts = buildParts(p.rows);
+      const total = parts.reduce((a, x) => a + x.steps.length, 0);
+      const uses = projects.filter(j => j.patternId === p.id);
+      const best = uses.filter(j => j.status !== 'done').map(j => progInfo(j.prog, parts).pct).sort((a, b) => b - a)[0] || 0;
+      return { ...p, h, parts, total, tint: tint(h), strong: strong(h), pct: best,
+        diffLabel: DIFF[p.diff || 1], diffDots: dots(p.diff || 1), hasCover: !!p.cover, noCover: !p.cover, coverBg: p.cover ? `url(${p.cover})` : 'none',
+        sourceLine: p.kit ? [p.kit, p.page ? 'p. ' + p.page : ''].filter(Boolean).join(' · ') : `${p.designer} · ${p.hook}`,
+        partsLine: `${parts.length} pièce${parts.length > 1 ? 's' : ''} · ${total} tours` + (uses.length ? ` · ${uses.length} projet${uses.length > 1 ? 's' : ''}` : ''),
+        yarnDots: (p.yarns || []).map(([name, hex]) => ({ name, hex })),
+        source: p.kit || p.designer || 'Mes créations',
+        star: p.fav ? '★' : '☆', starColor: p.fav ? 'oklch(0.7 0.16 70)' : t.mutedOnTint,
+        toggleFav: e => { e && e.stopPropagation && e.stopPropagation(); this.updPattern(p.id, x => ({ ...x, fav: !x.fav })); },
+        open: () => this.setState({ screen: 'detail', from: 'library', ctxProj: null, openId: p.id, partSel: null }) };
+    };
+    const all = patterns.map(deco);
+    const q = query.trim().toLowerCase();
+    const tog = (k, v) => this.setState(st => { const arr = st.fil[k]; return { fil: { ...st.fil, [k]: arr.includes(v) ? arr.filter(x => x !== v) : [...arr, v] } }; });
+    const match = (p, skip) => (skip === 'fav' || !fil.fav || p.fav) && (skip === 'cats' || !fil.cats.length || fil.cats.includes(p.category))
+      && (skip === 'diffs' || !fil.diffs.length || fil.diffs.includes(p.diff || 1)) && (skip === 'srcs' || !fil.srcs.length || fil.srcs.includes(p.source))
+      && (!q || [p.name, p.designer, p.category, p.kit || ''].join(' ').toLowerCase().includes(q));
+    const visible = all.filter(p => match(p)).sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    const chip = (label, on, onClick, n) => ({ isChip: true, isSep: false, label, n, bg: on ? t.ink : t.chip, color: on ? t.bg : t.ink, onClick });
+    const sep = { isSep: true, isChip: false };
+    const anyFil = fil.fav || fil.cats.length || fil.diffs.length || fil.srcs.length;
+    const usedCats = cats.filter(c => all.some(p => p.category === c)).concat([...new Set(all.map(p => p.category))].filter(c => c && !cats.includes(c)));
+    const srcs = [...new Set(all.map(p => p.source))].sort((a, b) => a.localeCompare(b, 'fr'));
+    const filters = [
+      ...(anyFil ? [chip('✕ Effacer', false, () => this.setState({ fil: { fav: false, cats: [], diffs: [], srcs: [] } }), '')] : []),
+      chip('★ Favoris', fil.fav, () => this.setState(st => ({ fil: { ...st.fil, fav: !st.fil.fav } })), all.filter(p => p.fav && match(p, 'fav')).length || ''), sep,
+      ...usedCats.map(c => chip(c, fil.cats.includes(c), () => tog('cats', c), all.filter(p => p.category === c && match(p, 'cats')).length)), sep,
+      ...[1, 2, 3].map(d => chip(DIFF[d], fil.diffs.includes(d), () => tog('diffs', d), all.filter(p => (p.diff || 1) === d && match(p, 'diffs')).length)), sep,
+      ...srcs.map(sr => chip(sr.replace('Ricorumi ', ''), fil.srcs.includes(sr), () => tog('srcs', sr), all.filter(p => p.source === sr && match(p, 'srcs')).length)),
+    ];
+    const r0 = projects.filter(j => j.status !== 'done' && j.patternId).map(j => {
+      const pat = all.find(p => p.id === j.patternId); if (!pat) return null;
+      const info = progInfo(j.prog, pat.parts); const ap = j.activePart ?? 0, apart = pat.parts[ap] || pat.parts[0];
+      const st = apart.steps[Math.min((j.prog || {})[ap] || 0, apart.steps.length - 1)];
+      return { ...info, touched: j.touched || 0, strong: pat.strong, name: j.title || pat.name, pctLabel: info.pct + ' %',
+        resumeLabel: st ? st.label : '', resumeText: st ? `${apart.name} · ${st.row.text}` : '',
+        open: () => this.setState({ screen: 'detail', from: 'library', ctxProj: j.id, openId: pat.id, partSel: null }) };
+    }).filter(x => x && x.done > 0 && x.done < x.total).sort((a, b) => b.touched - a.touched)[0];
+
+    const o = all.find(p => p.id === this.state.openId) || all[0];
+    let cur = {}, inc = () => {}, dec = () => {}, warn = { show: false };
+    if (o) {
+      const ctx = projects.find(j => j.id === this.state.ctxProj && j.patternId === o.id);
+      const has = !!ctx, prog = has ? (ctx.prog || {}) : {};
+      const updCtx = fn => has && this.updProject(ctx.id, j => ({ ...fn(j), touched: Date.now(), status: j.status === 'todo' ? 'doing' : j.status, start: j.start || today() }));
+      const ymap = Object.fromEntries((o.yarns || []).map(([n, h]) => [n.toLowerCase(), h]));
+      const selI = Math.min(this.state.partSel ?? (has ? ctx.activePart : 0) ?? 0, o.parts.length - 1);
+      const parts = o.parts.map((pt, i) => {
+        const n = pt.steps.length, d = Math.min(prog[i] || 0, n);
+        return { name: pt.name, pct: n ? Math.round(d / n * 100) : 0, label: n ? (d >= n ? 'Fini ✓' : `${d}/${n}`) : 'Notes',
+          dot: n && d >= n ? strong(165) : d > 0 ? accent : 'transparent', bg: i === selI ? o.tint : t.surface, border: i === selI ? o.strong : t.chip,
+          onClick: () => this.setState({ partSel: i }) };
+      });
+      const sp = o.parts[selI], n = sp.steps.length, d = Math.min(prog[selI] || 0, n);
+      const items = sp.items.map(r => {
+        if (r.type === 'note') return { ...r, isNote: true, isRow: false };
+        const doneR = has && d >= r.offset + r.n, active = has && d >= r.offset && d < r.offset + r.n, inRow = active ? d - r.offset : 0;
+        const mm = r.text.match(/^En ([^,]+),/); const hex = mm && ymap[mm[1].toLowerCase()];
+        return { ...r, isRow: true, isNote: false, label: doneR ? '✓ ' + r.label : r.label,
+          bg: active ? o.tint : 'transparent', color: doneR ? t.muted : t.ink, deco: doneR ? 'line-through' : 'none', labelBg: active ? o.strong : t.chip,
+          dot: hex || 'transparent', dotDisplay: hex ? 'inline-block' : 'none',
+          subDisplay: r.n > 1 && !doneR ? 'flex' : 'none',
+          ticks: r.stepLabels.map((l, j) => ({ label: l, bg: (active && j < inRow) || doneR ? o.strong : (active && j === inRow ? t.surface : t.chip), color: '#2a2233' })),
+          onClick: () => updCtx(j => ({ prog: { ...(j.prog || {}), [selI]: r.offset }, activePart: selI })) };
+      });
+      const cs = sp.steps[Math.min(d, n - 1)];
+      const sel = { name: sp.name, items, hasRows: has && n > 0, progressLabel: `${d}/${n}`,
+        curLabel: d >= n ? 'Fini ✓' : cs.label, groupInfo: d < n && cs.n > 1 ? `${cs.row.label} · ${cs.j + 1}/${cs.n}` : '' };
+      const step = dd => () => updCtx(j => { const pr = { ...(j.prog || {}) }; pr[selI] = Math.max(0, Math.min(n, (pr[selI] || 0) + dd)); return { prog: pr, activePart: selI }; });
+      inc = step(1); dec = step(-1);
+      const ctxList = projects.filter(j => j.patternId === o.id).map(j => ({ id: j.id, title: j.title || o.name, sub: [j.forWhom ? 'Pour ' + j.forWhom : '', j.status === 'done' ? 'Fini' : j.status === 'doing' ? 'En cours' : 'À faire'].filter(Boolean).join(' · '),
+        info: progInfo(j.prog, o.parts).pct + ' %', onClick: () => this.setState({ ctxProj: j.id, partSel: null }) }));
+      const activeUses = projects.filter(j => j.patternId === o.id && j.status !== 'done' && (j.status === 'doing' || progInfo(j.prog, o.parts).done > 0));
+      const openEdit = (p, id) => this.setState({ editWarn: false, screen: 'edit', openId: id || p.id, edit: { id: id || p.id, name: p.name, designer: p.designer || '', kit: p.kit || '', page: p.page != null ? String(p.page) : '', hook: p.hook === '—' ? '' : (p.hook || ''), size: p.size === '—' ? '' : (p.size || ''), category: p.category, diff: p.diff || 1, yarns: (p.yarns || []).map(y => [...y]),
+          raw: p.rows.map(r => r.type === 'section' ? r.text.toUpperCase() : r.type === 'note' ? r.text : `${r.label} : ${r.text}${r.count !== '' && r.count != null ? ` (${r.count})` : ''}`).join('\n') } });
+      cur = { ...o, parts, sel, hasCtx: has, noCtx: !has, ctxTitle: has ? (ctx.title || o.name) + (ctx.forWhom ? ' · pour ' + ctx.forWhom : '') : '', ctxList, headLine: [o.kit || o.designer || '', o.page ? 'p. ' + o.page : ''].filter(Boolean).join(' · '), star: o.fav ? '★' : '☆', starColor: o.fav ? 'oklch(0.7 0.16 70)' : t.mutedOnTint, toggleFav: o.toggleFav,
+        edit: () => { if (activeUses.length) this.setState({ editWarn: true }); else openEdit(o); },
+      };
+      warn = { show: !!this.state.editWarn && screen === 'detail',
+        title: activeUses.length > 1 ? `${activeUses.length} projets sont en cours avec ce pattern` : 'Un projet est en cours avec ce pattern',
+        projects: activeUses.map(j => ({ id: j.id, title: j.title || o.name, info: progInfo(j.prog, o.parts).pct + ' %' })),
+        stop: e => e.stopPropagation(), cancel: () => this.setState({ editWarn: false }), anyway: () => openEdit(o),
+        copy: () => { const id = 'p' + Date.now(); const { prog: _p, activePart: _a, touched: _t, ...rest } = patterns.find(p => p.id === o.id); const copy = { ...rest, id, name: o.name + ' (copie)', kit: undefined, designer: o.designer };
+          this.setPatterns(ps => [copy, ...ps]); openEdit(copy, id); } };
+      cur = { ...cur,
+        remove: () => {
+          const nb = projects.filter(j => j.patternId === o.id).length;
+          if (!window.confirm(`Supprimer « ${o.name} » ?` + (nb ? `\n${nb} projet${nb > 1 ? 's' : ''} lié${nb > 1 ? 's' : ''} sera conservé${nb > 1 ? 's' : ''} comme projet perso.` : ''))) return;
+          this.setProjects(ps => ps.map(j => j.patternId === o.id ? { ...j, patternId: null, mode: 'perso', title: j.title || o.name } : j));
+          this.setPatterns(ps => ps.filter(p => p.id !== o.id));
+          this.setState({ screen: this.state.from === 'project' ? 'project' : 'library', ctxProj: null });
+        },
+        pickCover: () => this.pick({ kind: 'pattern', id: o.id }), newProject: () => this.newProject(o.id, 'doing') };
+    }
+
+    // Projects
+    const oklchWarn = 'oklch(0.9 0.08 60)';
+    const decoProj = pr => {
+      const pat = pr.patternId && all.find(p => p.id === pr.patternId);
+      const title = pr.title || (pat ? pat.name : 'Projet sans titre');
+      const h = pat ? pat.h : 50;
+      let badge = '', badgeBg = t.chip, badgeColor = t.ink;
+      if (pr.status === 'done') badge = pr.hours ? `${pr.hours} h` : 'Fini';
+      else if (pr.due) { const dd = daysUntil(pr.due); badge = dd < 0 ? 'En retard' : dd === 0 ? 'Aujourd’hui' : dd <= 45 ? `J-${dd}` : fmtShort(pr.due); if (dd < 7) { badgeBg = oklchWarn; badgeColor = '#4a2e10'; } }
+      const sub = pr.status === 'done' ? [pat ? pat.name : 'Projet perso', pr.start && pr.end ? `${fmtShort(pr.start)} → ${fmtShort(pr.end)}` : ''].filter(Boolean).join(' · ')
+        : (pr.status === 'doing' ? 'En cours · ' : '') + (pat ? `${pat.name} · ${progInfo(pr.prog, pat.parts).pct} %` : (pr.description || 'Projet perso'));
+      return { ...pr, pat, rawTitle: pr.title, title, sub, forLine: pr.forWhom ? 'Pour ' + pr.forWhom : '', tint: tint(h), initial: title.charAt(0).toUpperCase(),
+        hasPhoto: !!pr.photo, noPhoto: !pr.photo, photoBg: pr.photo ? `url(${pr.photo})` : 'none', badge, badgeBg, badgeColor, open: () => this.setState({ screen: 'project', projEdit: false, projId: pr.id, commentDraft: '' }) };
+    };
+    const projAll = projects.map(decoProj);
+    const sortKey = p => p.status === 'done' ? -(new Date(p.end || '2000-01-01')) : (p.due ? new Date(p.due).getTime() : 9e15);
+    const inTab = (p, k) => k === 'done' ? p.status === 'done' : p.status !== 'done';
+    const projList = projAll.filter(p => inTab(p, projTab)).sort((a, b) => sortKey(a) - sortKey(b));
+    const projTabs = [['todo', 'À faire'], ['done', 'Finis']].map(([k, label]) => ({ k, label, n: projAll.filter(p => inTab(p, k)).length, bg: projTab === k ? t.surface : 'transparent', onClick: () => this.setState({ projTab: k }) }));
+
+    const fin = projects.filter(p => p.status === 'done');
+    const hoursT = fin.reduce((a, p) => a + (+p.hours || 0), 0);
+    const durs = fin.filter(p => p.start && p.end).map(p => (new Date(p.end) - new Date(p.start)) / 86400000 + 1);
+    const people = {}; fin.forEach(p => { const k = p.forWhom || '—'; people[k] = (people[k] || 0) + 1; });
+    const pmax = Math.max(1, ...Object.values(people));
+    const now = new Date(today() + 'T12:00');
+    const months = Array.from({ length: 6 }, (_, i) => { const dt = new Date(now.getFullYear(), now.getMonth() - 5 + i, 1); return { key: dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0'), l: dt.toLocaleDateString('fr-FR', { month: 'short' }).replace('.', '') }; });
+    months.forEach(m => { m.v = fin.filter(p => (p.end || '').startsWith(m.key)).reduce((a, p) => a + (+p.hours || 0), 0); });
+    const mmax = Math.max(1, ...months.map(m => m.v));
+    const stats = { tint: tint(165), strong: strong(165),
+      kpis: [{ v: fin.length, l: 'projets finis' }, { v: hoursT + ' h', l: 'de crochet' }, { v: durs.length ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) + ' j' : '—', l: 'en moyenne' }],
+      people: Object.entries(people).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, n]) => ({ name, n, pct: Math.round(n / pmax * 100) })),
+      months: months.map(m => ({ key: m.key, l: m.l, v: m.v || '', h: Math.round(m.v / mmax * 100) })) };
+
+    const pr = projAll.find(p => p.id === this.state.projId);
+    let pj = {};
+    if (pr) {
+      const upd = o2 => this.updProject(pr.id, o2);
+      const fld = k => e => upd({ [k]: e.target.value });
+      const isPattern = pr.patternId !== null && pr.patternId !== undefined && pr.mode !== 'perso';
+      const addComment = () => { const tx = commentDraft.trim(); if (!tx) return; upd(p => ({ comments: [...(p.comments || []), { d: today(), text: tx }] })); this.setState({ commentDraft: '' }); };
+      const editing = !!this.state.projEdit || !!pr.isNew;
+      pj = { ...pr, displayTitle: pr.title, editing, ro: !editing, toggleEdit: () => { if (editing) upd({ isNew: false }); this.setState({ projEdit: !editing }); }, title: pr.rawTitle || '', titlePh: pr.pat ? pr.pat.name : 'Nom du projet', photoH: pr.photo ? 220 : 110,
+        isPattern, isPerso: !isPattern, hasPattern: isPattern && !!pr.pat,
+        patName: pr.pat ? pr.pat.name : '', patLine: pr.pat ? progInfo(pr.prog, pr.pat.parts).line : '', patPct: pr.pat ? progInfo(pr.prog, pr.pat.parts).pct : 0, patTint: pr.pat ? pr.pat.tint : t.chip, patStrong: pr.pat ? pr.pat.strong : accent,
+        openPattern: () => this.setState({ screen: 'detail', from: 'project', ctxProj: pr.id, openId: pr.patternId, partSel: null }),
+        modes: [['pattern', 'Depuis un pattern'], ['perso', 'Projet perso']].map(([k, label]) => ({ k, label, bg: (k === 'pattern') === isPattern ? t.surface : 'transparent',
+          onClick: () => upd(k === 'pattern' ? { patternId: pr.patternId || '', mode: 'pattern' } : { mode: 'perso', patternId: null }) })),
+        patternChips: all.map(p => ({ id: p.id, name: p.name, bg: pr.patternId === p.id ? p.tint : 'transparent', border: pr.patternId === p.id ? p.strong : t.chip, onClick: () => upd({ patternId: p.id, mode: 'pattern' }) })),
+        statuses: [['todo', 'À faire'], ['doing', 'En cours'], ['done', 'Fini']].map(([k, label]) => ({ k, label, bg: pr.status === k ? (k === 'done' ? strong(165) : k === 'doing' ? accent : t.surface) : 'transparent', color: pr.status === k && k !== 'todo' ? '#2a2233' : t.ink,
+          onClick: () => upd(p => ({ status: k, start: k !== 'todo' && !p.start ? today() : p.start, end: k === 'done' && !p.end ? today() : p.end })) })),
+        showDates: pr.status !== 'todo', doneDisplay: pr.status === 'done' ? 'flex' : 'none', hours: pr.hours ?? '',
+        comments: (pr.comments || []).map(c => ({ date: fmtD(c.d), text: c.text })), commentDraft,
+        onTitle: fld('title'), onDesc: fld('description'), onFor: fld('forWhom'), onDue: fld('due'), onStart: fld('start'), onEnd: fld('end'), onHours: fld('hours'),
+        onComment: e => this.setState({ commentDraft: e.target.value }), onCommentKey: e => { if (e.key === 'Enter') addComment(); }, addComment,
+        pickPhoto: () => this.pick({ kind: 'project', id: pr.id }),
+        back: () => { const p = projects.find(x => x.id === pr.id); if (p && p.isNew && !p.title && !p.patternId && !p.description) this.setProjects(ps => ps.filter(x => x.id !== pr.id)); else upd({ isNew: false }); this.setState({ screen: 'projects', projTab: pr.status === 'done' ? 'done' : 'todo' }); },
+        remove: () => { this.setProjects(ps => ps.filter(x => x.id !== pr.id)); this.setState({ screen: 'projects' }); } };
+    }
+
+    // Import & paste
+    const hlBg = dark ? 'oklch(0.42 0.09 350)' : 'oklch(0.9 0.07 350)';
+    const toParts = ps => ps.map(p => ({ text: p.text, bg: p.hl ? hlBg : 'transparent', pad: p.hl ? '0 3px' : '0' }));
+    const parsed = parse(draft.raw, term);
+    const parsedRows = parsed.filter(r => r.type === 'row');
+    const convCount = parsed.reduce((a, r) => a + r.parts.filter(p => p.hl).length, 0);
+    const preview = parsed.map(r => ({ ...r, isRow: r.type === 'row', isSection: r.type === 'section', isNote: r.type === 'note', plain: r.text, parts: toParts(r.parts) }));
+    const cantSave = !draft.name.trim() || !parsedRows.length;
+    const sample = parse(PDF_SAMPLE, imp.term)[0];
+    const selCount = SHROOOM.filter(p => imp.sel[p.id]).length;
+    const stepsL = ['Lecture des 36 pages', 'Repérage des modèles et des pièces', 'Détection de la terminologie'];
+    const impV = {
+      isChoose: imp.step === 'choose', isPdf: imp.step === 'pdf', isPhoto: imp.step === 'photo',
+      noPhoto: !imp.photo, hasPhoto: !!imp.photo, photoBg: imp.photo ? `url(${imp.photo.src})` : 'none', rot: imp.photo ? imp.photo.rot : 0,
+      boxW: imp.photo && imp.photo.rot % 180 ? 380 : 350, boxH: imp.photo && imp.photo.rot % 180 ? 350 : 380,
+      reading: !!imp.reading, canRead: !!imp.photo && !imp.reading, progress: imp.progress || 0, readLabel: 'Lecture du texte…',
+      err: imp.err || '', errDisplay: imp.err ? 'block' : 'none',
+      pickPhoto: () => this.pick({ kind: 'ocr' }), useExample: () => this.setImp({ photo: { src: 'assets/petits-pois.jpg', rot: 0, example: true }, err: '' }),
+      rotL: () => this.setImp({ photo: { ...imp.photo, rot: imp.photo.rot - 90 } }), rotR: () => this.setImp({ photo: { ...imp.photo, rot: imp.photo.rot + 90 } }),
+      clearPhoto: () => { clearInterval(this.timer); this.setImp({ photo: null, reading: false, err: '' }); }, read: () => this.readPhoto(), isPaste: imp.step === 'paste', analyzing: imp.phase < 3, ready: imp.phase >= 3,
+      steps: stepsL.map((label, i) => ({ label: label + (i === imp.phase ? '…' : ''), opacity: i <= imp.phase ? 1 : .4, mark: i < imp.phase ? '✓' : '', bg: i < imp.phase ? strong(165) : (i === imp.phase ? accent : t.chip), anim: i === imp.phase ? 'mpulse 1s infinite' : 'none' })),
+      terms: [['uk', 'Britannique (UK)'], ['us', 'Américaine (US)']].map(([k, label]) => ({ k, label, bg: imp.term === k ? t.surface : 'transparent', onClick: () => this.setImp({ term: k }) })),
+      sampleSrc: PDF_SAMPLE, sampleLabel: sample.label, sampleParts: toParts(sample.parts), warnDisplay: imp.term === 'us' ? 'block' : 'none',
+      foundLabel: `${SHROOOM.length} modèles retranscrits`, allLabel: selCount === SHROOOM.length ? 'Tout décocher' : 'Tout cocher',
+      toggleAll: () => { const on = selCount !== SHROOOM.length; this.setImp({ sel: Object.fromEntries(SHROOOM.map(p => [p.id, on])) }); },
+      models: SHROOOM.map(p => { const on = !!imp.sel[p.id]; const exists = patterns.some(x => x.id === p.id); const ps = buildParts(p.rows);
+        return { id: p.id, name: p.name, meta: `p. ${p.page} · ${ps.length} pièces · ${ps.reduce((a, x) => a + x.steps.length, 0)} tours${exists ? ' · déjà ajouté' : ''}`,
+          yarnDots: p.yarns.map(([name, hex]) => ({ name, hex })), check: on ? '✓' : '', boxBg: on ? accent : 'transparent', boxBorder: on ? accent : t.muted,
+          onClick: () => this.setImp({ sel: { ...imp.sel, [p.id]: !on } }) }; }),
+      ctaLabel: selCount ? `Ajouter ${selCount} pattern${selCount > 1 ? 's' : ''} à ma bibliothèque` : 'Sélectionnez au moins un modèle',
+      ctaBg: selCount ? accent : t.chip, ctaColor: selCount ? '#2a2233' : t.muted,
+      confirm: () => { if (!selCount) return; this.setPatterns(ps => [...SHROOOM.filter(p => imp.sel[p.id] && !ps.some(x => x.id === p.id)), ...ps]); this.setState({ screen: 'library', fil: { fav: false, cats: [], diffs: [], srcs: [KIT] }, imp: { ...imp, step: 'choose', phase: 0 } }); },
+    };
+    const sources = [
+      ['PDF', 'PDF', 'Patterns achetés', () => this.startPdf(), 350, true],
+      ['Aa', 'Coller du texte', 'Blog, e-mail, notes', () => this.setState({ imp: { ...imp, step: 'paste' }, draft: emptyDraft(), tab: 'source' }), 295, true],
+      ['◫', 'Photo', 'Livre, magazine', () => this.setImp({ step: 'photo', photo: null, reading: false, err: '' }), 80, true],
+      ['▶', 'Vidéo YouTube', 'Lien + notes · bientôt', null, 235, false],
+    ].map(([glyph, label, sub, fn, h, on]) => ({ glyph, label, sub, on, bg: tint(h), opacity: on ? 1 : .55, cursor: on ? 'pointer' : 'default', onClick: fn || (() => {}) }));
+    const gql = gq.trim().toLowerCase();
+    const gloss = GLOSS.filter(g => !gql || [g.fr, g.name, g.us, g.uk].join(' ').toLowerCase().includes(gql)).map(g => ({ ...g,
+      bg: gOpen === g.fr ? tint(350) : t.chip, warnDisplay: g.warn ? 'inline-block' : 'none', descDisplay: gOpen === g.fr ? 'block' : 'none', onClick: () => this.setState({ gOpen: gOpen === g.fr ? null : g.fr }) }));
+
+    let ed = {};
+    const E = this.state.edit;
+    if (screen === 'edit' && E) {
+      const setE = o2 => this.setState(st => ({ edit: { ...st.edit, ...o2 } }));
+      const f = k => e => setE({ [k]: e.target.value });
+      const ep = parse(E.raw, 'fr'), epRows = ep.filter(r => r.type === 'row').length, epParts = Math.max(1, ep.filter(r => r.type === 'section').length);
+      const ok = E.name.trim() && epRows;
+      ed = { ...E, kit: E.kit || '', page: E.page || '', onKit: f('kit'), onPage: f('page'), onName: f('name'), onDesigner: f('designer'), onHook: f('hook'), onSize: f('size'), onRaw: f('raw'),
+        summary: `${epParts} pièce${epParts > 1 ? 's' : ''} · ${epRows} lignes de tours`,
+        cats: [...cats.map(c => ({ label: c, bg: E.category === c ? tint(CATS[c] ?? hueOf(c)) : 'transparent', border: E.category === c ? strong(CATS[c] ?? hueOf(c)) : t.chip, onClick: () => setE({ category: c }) })), { label: '+ Nouvelle', bg: 'transparent', border: t.chip, onClick: () => this.addCategory(c => setE({ category: c })) }],
+        diffs: [1, 2, 3].map(n => ({ label: DIFF[n], bg: E.diff === n ? t.ink : t.chip, color: E.diff === n ? t.bg : t.ink, onClick: () => setE({ diff: n }) })),
+        yarns: E.yarns.map(([name, hex], i) => ({ name, hex,
+          onName: e => { const v = e.target.value; this.setState(st => ({ edit: { ...st.edit, yarns: st.edit.yarns.map((y, j) => j === i ? [v, y[1]] : y) } })); },
+          onHex: e => { const v = e.target.value; this.setState(st => ({ edit: { ...st.edit, yarns: st.edit.yarns.map((y, j) => j === i ? [y[0], v] : y) } })); },
+          remove: () => this.setState(st => ({ edit: { ...st.edit, yarns: st.edit.yarns.filter((_, j) => j !== i) } })) })),
+        addYarn: () => this.setState(st => ({ edit: { ...st.edit, yarns: [...st.edit.yarns, ['', '#c6a7e0']] } })),
+        saveBg: ok ? accent : t.chip, saveColor: ok ? '#2a2233' : t.muted,
+        cancel: () => this.setState({ screen: 'detail', edit: null }),
+        save: () => {
+          if (!ok) return;
+          const rows = ep.map(r => r.type === 'row' ? { type: 'row', label: r.label, text: r.text, count: r.count } : { type: r.type, text: r.text });
+          this.updPattern(E.id, p => ({ ...p, name: E.name.trim(), designer: E.designer, kit: (E.kit || '').trim() || undefined, page: (E.page || '').trim() || undefined, hook: E.hook || '—', size: E.size || '—', category: E.category, diff: E.diff, yarns: E.yarns.filter(y => y[0].trim()), rows }));
+          this.setState({ screen: 'detail', edit: null, partSel: null });
+        } };
+    }
+    const tabKey = screen === 'project' ? 'projects' : screen === 'detail' ? (this.state.from === 'project' ? 'projects' : 'library') : screen;
+    const tabs = [['library', '▦', 'Patterns'], ['projects', '✓', 'Projets'], ['import', '+', 'Importer'], ['glossary', 'Aa', 'Glossaire']].map(([k, glyph, label]) => ({ k, glyph, label,
+      color: tabKey === k ? t.ink : t.muted, bg: tabKey === k ? tint(350) : 'transparent', onClick: () => this.setState({ screen: k, editWarn: false, imp: k === 'import' ? { ...imp, step: 'choose' } : imp }) }));
+    const isDetail = screen === 'detail' && !!o;
+    const fromProject = this.state.from === 'project';
+
+    return {
+      t, tabs,
+      isLibrary: screen === 'library', isDetail, isProjects: screen === 'projects', isProject: screen === 'project' && !!pr, isImport: screen === 'import', isGlossary: screen === 'glossary',
+      nc: { open: !!(this.state.newCat && this.state.newCat.open), value: (this.state.newCat || {}).value || '',
+        onChange: e => this.setState({ newCat: { open: true, value: e.target.value } }), onKey: e => { if (e.key === 'Enter') this.commitCategory(); if (e.key === 'Escape') this.setState({ newCat: { open: false, value: '' } }); },
+        ok: () => this.commitCategory(), cancel: () => this.setState({ newCat: { open: false, value: '' } }) },
+      showTabs: screen !== 'edit' && !warn.show, isEdit: screen === 'edit' && !!E, ed, warn,
+      query, onQuery: e => this.setState({ query: e.target.value }), filters, visible, isEmpty: !visible.length, hasResume: false, resume: r0 || {},
+      backLabel: fromProject ? '‹ Projet' : '‹ Patterns', goBack: () => this.setState({ screen: fromProject ? 'project' : 'library' }),
+      cur, inc, dec,
+      newProject: () => this.newProject(null, projTab), projTabs, projList, projEmpty: !projList.length, showStats: projTab === 'done' && fin.length > 0, stats, pj,
+      imp: impV, sources, impBack: () => { clearInterval(this.timer); this.setImp({ step: 'choose', phase: 0 }); },
+      draft, onName: this.setDraft('name'), onDesigner: this.setDraft('designer'), onHook: this.setDraft('hook'), onRaw: this.setDraft('raw'),
+      catChips: [...cats.map(c => ({ label: c, bg: draft.category === c ? tint(CATS[c] ?? hueOf(c)) : 'transparent', border: draft.category === c ? strong(CATS[c] ?? hueOf(c)) : t.chip, onClick: () => this.setState(st => ({ draft: { ...st.draft, category: c } })) })), { label: '+ Nouvelle', bg: 'transparent', border: t.chip, onClick: () => this.addCategory(c => this.setState(st => ({ draft: { ...st.draft, category: c } }))) }],
+      diffChips: [1, 2, 3].map(n => ({ label: DIFF[n], bg: draft.diff === n ? t.ink : t.chip, color: draft.diff === n ? t.bg : t.ink, onClick: () => this.setState(st => ({ draft: { ...st.draft, diff: n } })) })),
+      termChips: [['uk', 'UK'], ['us', 'US'], ['fr', 'Déjà FR']].map(([k, label]) => ({ k, label, bg: term === k ? t.surface : 'transparent', onClick: () => this.setState({ term: k }) })),
+      tabSource: () => this.setState({ tab: 'source' }), tabPreview: () => this.setState({ tab: 'preview' }),
+      srcTabBg: tab === 'source' ? t.surface : 'transparent', prevTabBg: tab === 'preview' ? t.surface : 'transparent', isSourceTab: tab === 'source', isPreviewTab: tab === 'preview',
+      parsedRowCount: parsedRows.length, preview,
+      previewSummary: parsed.length ? `${parsedRows.length} rangs détectés · ${convCount} termes convertis (surlignés)` : 'Collez d’abord un pattern dans « Texte source ».',
+      draftHasPhoto: !!draft.cover, draftPhotoBg: draft.cover ? `url(${draft.cover})` : 'none',
+      pasteExample: () => this.setState(st => ({ term: 'uk', tab: 'preview', draft: { ...st.draft, raw: EXAMPLE, name: st.draft.name || 'Petite boule verte', designer: st.draft.designer || 'Exemple UK', hook: st.draft.hook || '3 mm' } })),
+      saveBg: cantSave ? t.chip : accent, saveColor: cantSave ? t.muted : '#2a2233',
+      save: () => {
+        if (cantSave) return;
+        const id = 'p' + Date.now();
+        const rows = parsed.map(r => r.type === 'row' ? { type: 'row', label: r.label, text: r.text, count: r.count } : { type: r.type, text: r.text });
+        this.setPatterns(ps => [{ id, name: draft.name.trim(), designer: draft.designer || 'Mes créations', category: draft.category, hook: draft.hook || '—', size: '—', diff: draft.diff, yarns: draft.yarns || [], cover: draft.cover || '', prog: {}, rows }, ...ps]);
+        this.setState({ screen: 'detail', from: 'library', ctxProj: null, openId: id, partSel: null });
+      },
+      gq, onGq: e => this.setState({ gq: e.target.value }), gloss,
+    };
+  }
+
+  render() {
+    const v = this.renderVals();
+    const { t, cur, pj, imp, ed, nc, warn, stats, resume } = v;
+    const backBtn = (label, onClick) => (
+      <button onClick={onClick} style={s(`height:40px;padding:0 14px 0 10px;border-radius:20px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>{label}</button>
+    );
+    const field = (label, value, onChange, extra = {}) => (
+      <label style={s(`display:flex;flex-direction:column;gap:4px;background:${t.chip};border-radius:16px;padding:9px 14px` + (extra.span ? ';grid-column:1 / -1' : ''))}>
+        <span style={s(`font-size:11px;color:${t.muted}`)}>{label}</span>
+        <input value={value} onChange={onChange} placeholder={extra.placeholder} readOnly={extra.readOnly} type={extra.type || 'text'}
+          style={s(`border:0;background:transparent;outline:none;font-size:15px;color:${t.ink};min-width:0;width:100%`)} />
+      </label>
+    );
+    const newCatRow = nc.open && (
+      <div style={s('display:flex;gap:8px')}>
+        <input value={nc.value} onChange={nc.onChange} onKeyDown={nc.onKey} autoFocus placeholder="Nom de la catégorie" aria-label="Nom de la catégorie"
+          style={s(`flex:1;min-width:0;height:42px;border:0;border-radius:14px;padding:0 12px;background:${t.chip};color:${t.ink};font-size:14px;outline:none`)} />
+        <button onClick={nc.ok} style={s(`height:42px;padding:0 14px;border-radius:14px;border:0;background:${t.ink};color:${t.bg};font:700 13px 'DM Sans';cursor:pointer`)}>Ajouter</button>
+        <button onClick={nc.cancel} aria-label="Annuler" style={s(`width:42px;height:42px;border-radius:14px;border:0;background:transparent;color:${t.muted};font:600 18px 'DM Sans';cursor:pointer`)}>×</button>
+      </div>
+    );
+    const catChipRow = list => (
+      <div style={s('display:flex;flex-wrap:wrap;gap:8px')}>
+        {list.map(c => <button key={c.label} onClick={c.onClick} style={s(`height:34px;padding:0 13px;border-radius:17px;border:2px solid ${c.border};background:${c.bg};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>{c.label}</button>)}
+      </div>
+    );
+    const diffRow = list => (
+      <div style={s('display:flex;gap:8px;align-items:center')}>
+        <span style={s(`font:600 13px 'DM Sans';flex:none`)}>Niveau</span>
+        {list.map(c => <button key={c.label} onClick={c.onClick} style={s(`height:34px;padding:0 12px;border-radius:17px;border:0;background:${c.bg};color:${c.color};font:600 13px 'DM Sans';cursor:pointer`)}>{c.label}</button>)}
+      </div>
+    );
+    const hlText = parts => parts.map((pt, i) => <span key={i} style={s(`background:${pt.bg};border-radius:5px;padding:${pt.pad}`)}>{pt.text}</span>);
+
+    return (
+      <div style={s(`height:100dvh;display:flex;justify-content:center;background:${t.page}`)}>
+        {/* The app fills the phone screen; on a wider screen it stays phone-width, centred. */}
+        <div style={s(`width:100%;max-width:480px;height:100%;background:${t.bg};color:${t.ink};overflow:hidden;position:relative;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)`)}>
+          <input type="file" accept="image/*" ref={this.fileRef} onChange={this.onFile} style={{ display: 'none' }} />
+
+          {/* ── Bibliothèque ── */}
+          {v.isLibrary && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 20px 110px')}>
+            <div style={s(`font:800 34px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;margin:8px 0 16px`)}>Mes patterns</div>
+            {v.hasResume && (
+            <div onClick={resume.open} style={s(`cursor:pointer;border-radius:26px;padding:18px;background:${resume.strong};color:#2a2233;display:flex;flex-direction:column;gap:10px;margin-bottom:18px`)}>
+              <div style={s('display:flex;justify-content:space-between;align-items:center')}>
+                <span style={s(`font:700 12px 'DM Sans';letter-spacing:.08em;text-transform:uppercase`)}>Reprendre</span>
+                <span style={s(`font:600 13px 'DM Sans';background:rgba(255,255,255,.55);padding:5px 10px;border-radius:12px`)}>{resume.pctLabel}</span>
+              </div>
+              <div style={s(`font:800 26px/1.05 'Bricolage Grotesque',sans-serif`)}>{resume.name}</div>
+              <div style={s('display:flex;gap:10px;align-items:baseline;background:rgba(255,255,255,.5);border-radius:16px;padding:10px 12px')}>
+                <span style={s(`font:700 15px 'Bricolage Grotesque',sans-serif;flex:none`)}>{resume.resumeLabel}</span>
+                <span style={s('font-size:14px;line-height:1.35')}>{resume.resumeText}</span>
+              </div>
+            </div>
+            )}
+            <div style={s(`display:flex;align-items:center;gap:10px;background:${t.chip};border-radius:16px;padding:0 16px;height:46px`)}>
+              <span aria-hidden="true" style={s(`color:${t.muted};font-size:17px`)}>⌕</span>
+              <input value={v.query} onChange={v.onQuery} placeholder="Pattern, créatrice, kit…" aria-label="Rechercher un pattern" style={s(`flex:1;min-width:0;border:0;background:transparent;font-size:15px;outline:none;color:${t.ink}`)} />
+            </div>
+            <div className="scr" style={s('display:flex;gap:8px;margin:14px 0 18px;overflow-x:auto')}>
+              {v.filters.map((f, i) => f.isSep
+                ? <span key={'sep' + i} style={s(`flex:none;width:1px;height:22px;align-self:center;background:${t.muted};opacity:.35`)}></span>
+                : <button key={f.label} onClick={f.onClick} style={s(`flex:none;height:36px;padding:0 14px;border-radius:18px;border:0;background:${f.bg};color:${f.color};font:600 13px 'DM Sans';cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap`)}>{f.label}<span style={{ opacity: .55 }}>{f.n}</span></button>)}
+            </div>
+            <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:12px')}>
+              {v.visible.map(p => (
+                <div key={p.id} className="lift" onClick={p.open} style={s(`cursor:pointer;border-radius:24px;padding:12px;background:${p.tint};min-height:190px;display:flex;flex-direction:column;gap:6px`)}>
+                  {p.hasCover && <div style={s('width:100%;height:92px;border-radius:16px;background-size:cover;background-position:center', { backgroundImage: p.coverBg })}></div>}
+                  <div style={s('display:flex;justify-content:space-between;align-items:center')}>
+                    <span style={s(`font:600 11px 'DM Sans';padding:4px 9px;border-radius:10px;background:${t.pillOnTint}`)}>{p.category}</span>
+                    <span style={s('display:flex;align-items:center;gap:6px')}>
+                      <span style={s(`font:700 11px 'DM Sans';color:${t.mutedOnTint}`)} title={p.diffLabel}>{p.diffDots}</span>
+                      <button onClick={p.toggleFav} title="Favori" aria-label="Favori" style={s(`width:30px;height:30px;margin:-6px -4px -6px 0;border-radius:15px;border:0;background:transparent;color:${p.starColor};font-size:18px;line-height:1;cursor:pointer`)}>{p.star}</button>
+                    </span>
+                  </div>
+                  <div style={s(`font:700 18px/1.1 'Bricolage Grotesque',sans-serif;margin-top:2px;text-wrap:pretty`)}>{p.name}</div>
+                  <div style={s(`font-size:12px;color:${t.mutedOnTint};line-height:1.3`)}>{p.sourceLine}</div>
+                  <div style={s('display:flex;gap:4px')}>{p.yarnDots.map((y, i) => <span key={i} title={y.name} style={s(`width:12px;height:12px;border-radius:6px;background:${y.hex};box-shadow:0 0 0 1.5px ${t.pillOnTint}`)}></span>)}</div>
+                  <div style={s('margin-top:auto;display:flex;flex-direction:column;gap:6px')}>
+                    <div style={s(`font:600 11px 'DM Sans';color:${t.mutedOnTint}`)}>{p.partsLine}</div>
+                    <div style={s(`height:6px;border-radius:3px;background:${t.pillOnTint};overflow:hidden`)}><div style={s(`height:100%;width:${p.pct}%;background:${p.strong};border-radius:3px`)}></div></div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {v.isEmpty && <div style={s(`text-align:center;padding:40px 20px;color:${t.muted};font-size:14px`)}>Aucun pattern ne correspond.</div>}
+          </div>
+          )}
+
+          {/* ── Fiche pattern ── */}
+          {v.isDetail && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 16px 110px')}>
+            <div style={s(`border-radius:30px;padding:14px 16px 18px;background:${cur.tint};display:flex;flex-direction:column;gap:12px`)}>
+              <div style={s('display:flex;justify-content:space-between;align-items:center')}>
+                <button onClick={v.goBack} style={s(`flex:none;white-space:nowrap;height:40px;padding:0 14px 0 10px;border-radius:20px;border:0;background:${t.pillOnTint};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>{v.backLabel}</button>
+                <div style={s('display:flex;gap:6px;flex:none;align-items:center')}>
+                  <button onClick={cur.toggleFav} title="Favori" aria-label="Favori" style={s(`flex:none;width:40px;height:40px;border-radius:20px;border:0;background:transparent;color:${cur.starColor};font-size:19px;cursor:pointer`)}>{cur.star}</button>
+                  <button onClick={cur.edit} title="Modifier le pattern" aria-label="Modifier le pattern" style={s(`flex:none;width:40px;height:40px;border-radius:20px;border:0;background:transparent;color:${t.ink};font:600 17px 'DM Sans';cursor:pointer`)}>✎</button>
+                  <button onClick={cur.remove} title="Supprimer le pattern" aria-label="Supprimer le pattern" style={s(`flex:none;width:40px;height:40px;border-radius:20px;border:0;background:transparent;color:${t.mutedOnTint};cursor:pointer;display:flex;align-items:center;justify-content:center`)}><TrashIcon /></button>
+                </div>
+              </div>
+              <div style={s('display:flex;gap:14px;align-items:flex-start')}>
+                <button onClick={cur.pickCover} title="Ajouter une photo" aria-label="Ajouter une photo" style={s(`cursor:pointer;flex:none;width:92px;height:92px;border:0;padding:0;border-radius:20px;overflow:hidden;background:repeating-linear-gradient(135deg,${t.pillOnTint} 0 6px,transparent 6px 12px);display:flex;align-items:center;justify-content:center;text-align:center;font:600 11px/1.2 'DM Sans';color:${t.mutedOnTint}`)}>
+                  {cur.hasCover && <div style={s('width:92px;height:92px;background-size:cover;background-position:center', { backgroundImage: cur.coverBg })}></div>}
+                  {cur.noCover && <span>+ Photo</span>}
+                </button>
+                <div style={s('flex:1;min-width:0;display:flex;flex-direction:column;gap:5px')}>
+                  <div style={s(`font:600 11px 'DM Sans';letter-spacing:.06em;text-transform:uppercase;color:${t.mutedOnTint}`)}>{cur.headLine}</div>
+                  <div style={s(`font:800 28px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;text-wrap:pretty`)}>{cur.name}</div>
+                  <div style={s(`font-size:12px;color:${t.mutedOnTint}`)}>{cur.hook} · {cur.size} · {cur.diffLabel}</div>
+                </div>
+              </div>
+              <div style={s('display:flex;flex-wrap:wrap;gap:6px')}>
+                {cur.yarnDots.map((y, i) => <span key={i} style={s(`display:flex;align-items:center;gap:6px;background:${t.pillOnTint};border-radius:12px;padding:5px 10px 5px 6px;font:600 12px 'DM Sans'`)}><span style={s(`width:14px;height:14px;border-radius:7px;background:${y.hex}`)}></span>{y.name}</span>)}
+              </div>
+              {cur.hasCtx && <div style={s(`display:flex;align-items:center;gap:8px;border-radius:14px;padding:8px 12px;background:${t.ink};color:${t.bg};font:600 13px 'DM Sans'`)}><span style={{ opacity: .65 }}>Projet</span><span style={s('flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{cur.ctxTitle}</span></div>}
+            </div>
+
+            {cur.noCtx && (
+            <div style={s(`margin-top:12px;border-radius:22px;padding:14px;background:${t.surface};display:flex;flex-direction:column;gap:10px`)}>
+              <div style={s(`font:700 15px 'DM Sans'`)}>Suivre l’avancement</div>
+              <div style={s(`font-size:13px;color:${t.muted};line-height:1.4`)}>Chaque projet garde sa propre progression. Choisissez un projet ou démarrez-en un nouveau.</div>
+              {cur.ctxList.map(c => (
+                <button key={c.id} onClick={c.onClick} style={s(`display:flex;align-items:center;gap:10px;border:0;border-radius:16px;padding:10px 12px;background:${t.chip};color:${t.ink};cursor:pointer;text-align:left`)}>
+                  <span style={s('flex:1;min-width:0;display:flex;flex-direction:column;gap:2px')}><span style={s(`font:600 14px 'DM Sans'`)}>{c.title}</span><span style={s(`font-size:12px;color:${t.muted}`)}>{c.sub}</span></span>
+                  <span style={s(`font:700 13px 'DM Sans'`)}>{c.info} ›</span>
+                </button>
+              ))}
+              <button onClick={cur.newProject} style={s(`height:46px;border-radius:23px;border:0;background:${cur.strong};color:#2a2233;font:700 14px 'DM Sans';cursor:pointer`)}>+ Démarrer un nouveau projet</button>
+            </div>
+            )}
+            <div style={s(`position:sticky;top:0;z-index:2;background:${t.bg};padding:12px 0 10px;display:flex;flex-direction:column;gap:10px`)}>
+              <div className="scr" style={s('display:flex;gap:8px;overflow-x:auto')}>
+                {cur.parts.map((pt, i) => (
+                  <button key={i} onClick={pt.onClick} style={s(`flex:none;min-width:96px;text-align:left;border:2px solid ${pt.border};background:${pt.bg};color:${t.ink};border-radius:16px;padding:8px 12px;cursor:pointer;display:flex;flex-direction:column;gap:5px`)}>
+                    <span style={s(`display:flex;align-items:center;gap:6px;font:700 13px 'DM Sans';white-space:nowrap`)}><span style={s(`width:8px;height:8px;border-radius:4px;background:${pt.dot}`)}></span>{pt.name}</span>
+                    <span style={s(`font:600 11px 'DM Sans';color:${t.muted}`)}>{pt.label}</span>
+                    <span style={s(`height:4px;border-radius:2px;background:${t.chip};overflow:hidden;display:block`)}><span style={s(`display:block;height:100%;width:${pt.pct}%;background:${cur.strong}`)}></span></span>
+                  </button>
+                ))}
+              </div>
+              {cur.sel.hasRows && (
+              <div style={s(`border-radius:24px;padding:12px 12px 12px 18px;background:${t.surface};box-shadow:0 8px 24px -12px ${t.shadow};display:flex;align-items:center;gap:12px`)}>
+                <div style={s('flex:1;min-width:0')}>
+                  <div style={s(`font:600 11px 'DM Sans';letter-spacing:.08em;text-transform:uppercase;color:${t.muted}`)}>{cur.sel.name} · {cur.sel.progressLabel}</div>
+                  <div style={s(`font:800 28px/1.05 'Bricolage Grotesque',sans-serif`)}>{cur.sel.curLabel}<span style={s(`font:600 13px 'DM Sans';color:${t.muted};margin-left:8px`)}>{cur.sel.groupInfo}</span></div>
+                </div>
+                <button onClick={v.dec} aria-label="Tour précédent" style={s(`width:52px;height:52px;border-radius:26px;border:0;background:${t.chip};color:${t.ink};font:500 26px 'DM Sans';cursor:pointer`)}>−</button>
+                <button onClick={v.inc} aria-label="Tour suivant" style={s(`width:52px;height:52px;border-radius:26px;border:0;background:${cur.strong};color:#2a2233;font:500 26px 'DM Sans';cursor:pointer`)}>+</button>
+              </div>
+              )}
+            </div>
+
+            <div style={s('display:flex;flex-direction:column;gap:4px')}>
+              {cur.sel.items.map((r, i) => r.isNote
+                ? <div key={i} style={s(`font-size:13px;font-style:italic;color:${t.muted};padding:4px 6px 4px 62px;line-height:1.4`)}>{r.text}</div>
+                : (
+                <div key={i} onClick={r.onClick} style={s(`cursor:pointer;display:flex;gap:10px;align-items:flex-start;padding:11px 12px 11px 8px;border-radius:16px;background:${r.bg};color:${r.color}`)}>
+                  <span style={s(`flex:none;min-width:48px;text-align:center;font:700 13px 'DM Sans';padding:4px 6px;border-radius:10px;background:${r.labelBg}`)}>{r.label}</span>
+                  <span style={s('flex:1;display:flex;flex-direction:column;gap:6px')}>
+                    <span style={s(`font-size:15px;line-height:1.4;text-decoration:${r.deco};text-wrap:pretty`)}><span style={s(`display:${r.dotDisplay};width:11px;height:11px;border-radius:6px;background:${r.dot};margin-right:6px;vertical-align:-1px`)}></span>{r.text}</span>
+                    <span style={s(`display:${r.subDisplay};gap:4px;align-items:center`)}>
+                      {r.ticks.map((tk, j) => <span key={j} title={tk.label} style={s(`font:700 10px 'DM Sans';padding:2px 6px;border-radius:7px;background:${tk.bg};color:${tk.color}`)}>{tk.label}</span>)}
+                    </span>
+                  </span>
+                  <span style={s(`flex:none;font:600 13px 'DM Sans';color:${t.muted};padding-top:2px`)}>{r.count}</span>
+                </div>
+                ))}
+            </div>
+          </div>
+          )}
+
+          {/* ── Modifier un pattern ── */}
+          {v.isEdit && (<>
+          <div style={s('flex:none;display:flex;justify-content:space-between;align-items:center;padding:6px 16px 8px')}>
+            <button onClick={ed.cancel} style={s(`height:40px;padding:0 14px;border-radius:20px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Annuler</button>
+            <span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>Modifications</span>
+            <button onClick={ed.save} style={s(`height:40px;padding:0 16px;border-radius:20px;border:0;background:${ed.saveBg};color:${ed.saveColor};font:700 14px 'DM Sans';cursor:pointer`)}>Enregistrer</button>
+          </div>
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:4px 18px 40px;display:flex;flex-direction:column;gap:12px')}>
+            <input value={ed.name} onChange={ed.onName} placeholder="Nom du pattern" aria-label="Nom du pattern" style={s(`border:0;background:transparent;outline:none;font:800 28px 'Bricolage Grotesque',sans-serif;color:${t.ink};padding:4px 0;width:100%`)} />
+            <div style={s('display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px')}>
+              {field('Créatrice / source', ed.designer, ed.onDesigner, { span: true })}
+              {field('Livre / kit', ed.kit, ed.onKit, { placeholder: 'ex. Ricorumi Shrooom' })}
+              {field('Page', ed.page, ed.onPage, { placeholder: 'ex. 24' })}
+              {field('Crochet', ed.hook, ed.onHook, { placeholder: '3 mm' })}
+              {field('Taille', ed.size, ed.onSize, { placeholder: '8 cm' })}
+            </div>
+            {catChipRow(ed.cats)}
+            {newCatRow}
+            {diffRow(ed.diffs)}
+            <div style={s('display:flex;flex-direction:column;gap:8px')}>
+              <span style={s(`font:600 13px 'DM Sans'`)}>Fils</span>
+              {ed.yarns.map((y, i) => (
+                <div key={i} style={s('display:flex;gap:8px;align-items:center')}>
+                  <input type="color" value={y.hex} onChange={y.onHex} aria-label="Couleur du fil" style={s('flex:none;width:40px;height:40px;border:0;border-radius:12px;padding:0;background:transparent;cursor:pointer')} />
+                  <input value={y.name} onChange={y.onName} placeholder="ex. vert clair" aria-label="Nom du fil" style={s(`flex:1;min-width:0;height:42px;border:0;border-radius:14px;padding:0 12px;background:${t.chip};color:${t.ink};font-size:14px;outline:none`)} />
+                  <button onClick={y.remove} title="Retirer" aria-label="Retirer le fil" style={s(`flex:none;width:36px;height:36px;border-radius:18px;border:0;background:transparent;color:${t.muted};font:600 18px 'DM Sans';cursor:pointer`)}>×</button>
+                </div>
+              ))}
+              <button onClick={ed.addYarn} style={s(`align-self:flex-start;height:36px;padding:0 14px;border-radius:18px;border:0;background:${t.chip};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>+ Ajouter un fil</button>
+            </div>
+            <div style={s('display:flex;flex-direction:column;gap:6px')}>
+              <div style={s('display:flex;justify-content:space-between;align-items:baseline')}><span style={s(`font:600 13px 'DM Sans'`)}>Instructions</span><span style={s(`font:600 12px 'DM Sans';color:${t.muted}`)}>{ed.summary}</span></div>
+              <div style={s(`font-size:12px;line-height:1.45;color:${t.muted}`)}>Une ligne par tour : « T3 : *1 ms, 1 aug* x6 (18) ». Noms de pièce en MAJUSCULES. Les autres lignes deviennent des notes.</div>
+              <textarea value={ed.raw} onChange={ed.onRaw} aria-label="Instructions" style={s(`width:100%;min-height:340px;resize:vertical;border:0;border-radius:18px;padding:14px;background:${t.surface};color:${t.ink};font:400 13px/1.6 ui-monospace,Menlo,monospace;outline:none`)}></textarea>
+            </div>
+          </div>
+          </>)}
+
+          {/* ── Projets ── */}
+          {v.isProjects && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 20px 110px;display:flex;flex-direction:column;gap:14px')}>
+            <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:8px')}>
+              <div style={s(`font:800 34px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em`)}>Projets</div>
+              <button onClick={v.newProject} style={s(`height:42px;padding:0 16px;border-radius:21px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 14px 'DM Sans';cursor:pointer`)}>+ Nouveau</button>
+            </div>
+            <div style={s(`display:grid;grid-template-columns:repeat(2,1fr);background:${t.chip};border-radius:16px;padding:4px`)}>
+              {v.projTabs.map(pt => <button key={pt.k} onClick={pt.onClick} style={s(`height:40px;border-radius:12px;border:0;background:${pt.bg};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>{pt.label} <span style={{ opacity: .5 }}>{pt.n}</span></button>)}
+            </div>
+
+            {v.showStats && (
+            <div style={s(`border-radius:26px;padding:16px;background:${stats.tint};display:flex;flex-direction:column;gap:14px`)}>
+              <div style={s('display:grid;grid-template-columns:repeat(3,1fr);gap:8px')}>
+                {stats.kpis.map(k => <div key={k.l} style={s(`background:${t.pillOnTint};border-radius:16px;padding:10px 12px`)}><div style={s(`font:800 26px/1 'Bricolage Grotesque',sans-serif`)}>{k.v}</div><div style={s(`font:600 11px 'DM Sans';color:${t.mutedOnTint};margin-top:4px`)}>{k.l}</div></div>)}
+              </div>
+              <div style={s('display:flex;flex-direction:column;gap:6px')}>
+                <div style={s(`font:700 13px 'DM Sans'`)}>Pour qui</div>
+                {stats.people.map(pp => (
+                  <div key={pp.name} style={s('display:grid;grid-template-columns:72px 1fr 24px;gap:8px;align-items:center;font-size:13px')}>
+                    <span style={s('overflow:hidden;text-overflow:ellipsis;white-space:nowrap')}>{pp.name}</span>
+                    <span style={s(`height:10px;border-radius:5px;background:${t.pillOnTint};overflow:hidden`)}><span style={s(`display:block;height:100%;width:${pp.pct}%;background:${stats.strong};border-radius:5px`)}></span></span>
+                    <b style={{ textAlign: 'right' }}>{pp.n}</b>
+                  </div>
+                ))}
+              </div>
+              <div style={s('display:flex;flex-direction:column;gap:6px')}>
+                <div style={s(`font:700 13px 'DM Sans'`)}>Heures par mois</div>
+                <div style={s('display:grid;grid-template-columns:repeat(6,1fr);gap:8px;align-items:end;height:84px')}>
+                  {stats.months.map(mo => <div key={mo.key} style={s('display:flex;flex-direction:column;align-items:center;gap:4px;height:100%;justify-content:flex-end')}><span style={s(`font:700 10px 'DM Sans'`)}>{mo.v}</span><span style={s(`width:100%;height:${mo.h}%;min-height:3px;border-radius:6px;background:${stats.strong}`)}></span><span style={s(`font:600 10px 'DM Sans';color:${t.mutedOnTint}`)}>{mo.l}</span></div>)}
+                </div>
+              </div>
+            </div>
+            )}
+
+            <div style={s('display:flex;flex-direction:column;gap:10px')}>
+              {v.projList.map(p => (
+                <div key={p.id} className="hov" onClick={p.open} style={s('cursor:pointer;display:flex;gap:12px;align-items:center;border-radius:22px;padding:10px 12px 10px 10px', { '--bg': t.surface, '--hbg': t.chip })}>
+                  {p.hasPhoto && <div style={s('width:64px;height:64px;border-radius:16px;flex:none;background-size:cover;background-position:center', { backgroundImage: p.photoBg })}></div>}
+                  {p.noPhoto && <div style={s(`width:64px;height:64px;border-radius:16px;flex:none;background:${p.tint};display:flex;align-items:center;justify-content:center;font:800 24px 'Bricolage Grotesque',sans-serif`)}>{p.initial}</div>}
+                  <div style={s('flex:1;min-width:0;display:flex;flex-direction:column;gap:3px')}>
+                    <div style={s(`font:700 16px/1.2 'DM Sans';overflow:hidden;text-overflow:ellipsis;white-space:nowrap`)}>{p.title}</div>
+                    <div style={s(`font-size:12px;color:${t.muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`)}>{p.sub}</div>
+                    <div style={s(`font:600 12px 'DM Sans'`)}>{p.forLine}</div>
+                  </div>
+                  <span style={s(`flex:none;font:700 12px 'DM Sans';padding:5px 9px;border-radius:10px;background:${p.badgeBg};color:${p.badgeColor}`)}>{p.badge}</span>
+                </div>
+              ))}
+              {v.projEmpty && <div style={s(`text-align:center;padding:30px 20px;color:${t.muted};font-size:14px`)}>Rien ici pour l’instant.</div>}
+            </div>
+          </div>
+          )}
+
+          {/* ── Fiche projet ── */}
+          {v.isProject && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 18px 110px;display:flex;flex-direction:column;gap:14px')}>
+            <div style={s('display:flex;justify-content:space-between;align-items:center')}>
+              {backBtn('‹ Projets', pj.back)}
+              <div style={s('display:flex;gap:2px;align-items:center;flex:none')}>
+                {pj.ro && <button onClick={pj.toggleEdit} title="Modifier le projet" aria-label="Modifier le projet" style={s(`flex:none;width:40px;height:40px;border-radius:20px;border:0;background:transparent;color:${t.ink};font:600 17px 'DM Sans';cursor:pointer`)}>✎</button>}
+                {pj.editing && <button onClick={pj.toggleEdit} style={s(`flex:none;height:36px;padding:0 14px;border-radius:18px;border:0;background:${t.ink};color:${t.bg};font:700 13px 'DM Sans';cursor:pointer`)}>OK</button>}
+                <button onClick={pj.remove} title="Supprimer le projet" aria-label="Supprimer le projet" style={s(`flex:none;width:40px;height:40px;border-radius:20px;border:0;background:transparent;color:${t.muted};cursor:pointer;display:flex;align-items:center;justify-content:center`)}><TrashIcon /></button>
+              </div>
+            </div>
+            <button onClick={pj.pickPhoto} aria-label={pj.hasPhoto ? 'Changer la photo' : 'Ajouter une photo'} style={s(`cursor:pointer;flex:none;padding:0;width:100%;height:${pj.photoH}px;border-radius:26px;overflow:hidden;background:repeating-linear-gradient(135deg,${t.chip} 0 8px,transparent 8px 16px);border:2px dashed ${t.chip};display:flex;align-items:center;justify-content:center;font:600 13px 'DM Sans';color:${t.muted}`)}>
+              {pj.hasPhoto && <div style={s('width:100%;height:100%;background-size:cover;background-position:center', { backgroundImage: pj.photoBg })}></div>}
+              {pj.noPhoto && <span>+ Ajouter une photo</span>}
+            </button>
+            {pj.editing && <input value={pj.title} onChange={pj.onTitle} placeholder={pj.titlePh} aria-label="Nom du projet" style={s(`border:0;background:transparent;outline:none;font:800 28px 'Bricolage Grotesque',sans-serif;color:${t.ink};padding:0;width:100%`)} />}
+            {pj.ro && <div style={s(`font:800 28px/1.1 'Bricolage Grotesque',sans-serif;color:${t.ink};text-wrap:pretty;overflow-wrap:anywhere`)}>{pj.displayTitle}</div>}
+            {pj.editing && (
+              <div style={s(`display:grid;grid-template-columns:1fr 1fr;background:${t.chip};border-radius:16px;padding:4px`)}>
+                {pj.modes.map(md => <button key={md.k} onClick={md.onClick} style={s(`height:38px;border-radius:12px;border:0;background:${md.bg};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>{md.label}</button>)}
+              </div>
+            )}
+            {pj.isPattern && (<>
+              {pj.editing && (
+                <div className="scr" style={s('display:flex;gap:8px;overflow-x:auto;margin:0 -18px;padding:0 18px;flex:none')}>
+                  {pj.patternChips.map(pc => <button key={pc.id} onClick={pc.onClick} style={s(`flex:none;height:38px;padding:0 14px;border-radius:19px;border:2px solid ${pc.border};background:${pc.bg};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer;white-space:nowrap`)}>{pc.name}</button>)}
+                </div>
+              )}
+              {pj.hasPattern && (
+                <div onClick={pj.openPattern} style={s(`cursor:pointer;display:flex;align-items:center;gap:12px;border-radius:20px;padding:12px 14px;background:${pj.patTint}`)}>
+                  <div style={s('flex:1;min-width:0')}>
+                    <div style={s(`font:700 15px 'DM Sans'`)}>{pj.patName}</div>
+                    <div style={s(`font-size:12px;color:${t.mutedOnTint};margin-top:2px`)}>{pj.patLine}</div>
+                    <div style={s(`height:6px;border-radius:3px;background:${t.pillOnTint};margin-top:8px;overflow:hidden`)}><div style={s(`height:100%;width:${pj.patPct}%;background:${pj.patStrong}`)}></div></div>
+                  </div>
+                  <span style={s(`font:700 14px 'DM Sans';flex:none`)}>Ouvrir ›</span>
+                </div>
+              )}
+            </>)}
+            {pj.isPerso && (
+              <textarea value={pj.description} onChange={pj.onDesc} readOnly={pj.ro} placeholder="Ce que je dois faire : modèle, fil, idées, étapes…" aria-label="Description" style={s(`width:100%;min-height:110px;resize:vertical;border:0;border-radius:18px;padding:14px;background:${t.chip};color:${t.ink};font-size:15px;line-height:1.5;outline:none;flex:none`)}></textarea>
+            )}
+            <div style={s('display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px')}>
+              {field('Pour qui', pj.forWhom, pj.onFor, { placeholder: 'ex. Inès', readOnly: pj.ro })}
+              {field('Pour quand', pj.due, pj.onDue, { type: 'date', readOnly: pj.ro })}
+            </div>
+            <div style={s('display:flex;flex-direction:column;gap:6px')}>
+              <span style={s(`font:600 13px 'DM Sans'`)}>Statut</span>
+              <div style={s(`display:grid;grid-template-columns:repeat(3,1fr);background:${t.chip};border-radius:16px;padding:4px`)}>
+                {pj.statuses.map(st => <button key={st.k} onClick={st.onClick} style={s(`height:38px;border-radius:12px;border:0;background:${st.bg};color:${st.color};font:600 14px 'DM Sans';cursor:pointer`)}>{st.label}</button>)}
+              </div>
+            </div>
+            {pj.showDates && (
+              <div style={s('display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px')}>
+                <label style={s(`display:flex;flex-direction:column;gap:4px;background:${t.chip};border-radius:16px;padding:9px 12px`)}><span style={s(`font-size:11px;color:${t.muted}`)}>Début</span><input type="date" value={pj.start} onChange={pj.onStart} readOnly={pj.ro} style={s(`border:0;background:transparent;outline:none;font-size:13px;color:${t.ink};min-width:0;width:100%`)} /></label>
+                <label style={s(`display:${pj.doneDisplay};flex-direction:column;gap:4px;background:${t.chip};border-radius:16px;padding:9px 12px`)}><span style={s(`font-size:11px;color:${t.muted}`)}>Fin</span><input type="date" value={pj.end} onChange={pj.onEnd} readOnly={pj.ro} style={s(`border:0;background:transparent;outline:none;font-size:13px;color:${t.ink};min-width:0;width:100%`)} /></label>
+                <label style={s(`display:flex;flex-direction:column;gap:4px;background:${t.chip};border-radius:16px;padding:9px 12px`)}><span style={s(`font-size:11px;color:${t.muted}`)}>Temps (h)</span><input type="number" min="0" step="0.5" value={pj.hours} onChange={pj.onHours} readOnly={pj.ro} placeholder="0" style={s(`border:0;background:transparent;outline:none;font-size:15px;color:${t.ink};min-width:0;width:100%`)} /></label>
+              </div>
+            )}
+            <div style={s('display:flex;flex-direction:column;gap:8px;margin-top:4px')}>
+              <span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>Commentaires</span>
+              {pj.comments.map((c, i) => (
+                <div key={i} style={s(`border-radius:16px;padding:10px 12px;background:${t.surface};display:flex;flex-direction:column;gap:3px`)}><span style={s(`font:600 11px 'DM Sans';color:${t.muted}`)}>{c.date}</span><span style={s('font-size:14px;line-height:1.45')}>{c.text}</span></div>
+              ))}
+              <div style={s('display:flex;gap:8px')}>
+                <input value={pj.commentDraft} onChange={pj.onComment} onKeyDown={pj.onCommentKey} placeholder="Ajouter un commentaire…" aria-label="Ajouter un commentaire" style={s(`flex:1;min-width:0;height:46px;border:0;border-radius:16px;padding:0 14px;background:${t.chip};color:${t.ink};font-size:14px;outline:none`)} />
+                <button onClick={pj.addComment} style={s(`height:46px;padding:0 16px;border-radius:16px;border:0;background:${t.ink};color:${t.bg};font:700 14px 'DM Sans';cursor:pointer`)}>Ajouter</button>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {/* ── Importer ── */}
+          {v.isImport && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 20px 110px;display:flex;flex-direction:column;gap:14px')}>
+            {imp.isChoose && (<>
+              <div style={s(`font:800 34px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;margin:8px 0 4px`)}>Importer</div>
+              <div style={s(`font-size:14px;color:${t.muted}`)}>D'où vient votre pattern ?</div>
+              <div style={s('display:grid;grid-template-columns:1fr 1fr;gap:12px')}>
+                {v.sources.map(src => (
+                  <button key={src.label} onClick={src.onClick} disabled={!src.on} style={s(`cursor:${src.cursor};border:0;text-align:left;color:${t.ink};border-radius:24px;padding:16px;min-height:132px;background:${src.bg};opacity:${src.opacity};display:flex;flex-direction:column;gap:6px`)}>
+                    <div style={s(`width:40px;height:40px;border-radius:12px;background:${t.pillOnTint};display:flex;align-items:center;justify-content:center;font:800 14px 'Bricolage Grotesque',sans-serif`)}>{src.glyph}</div>
+                    <div style={s(`font:700 16px 'DM Sans';margin-top:auto`)}>{src.label}</div>
+                    <div style={s(`font-size:12px;color:${t.mutedOnTint}`)}>{src.sub}</div>
+                  </button>
+                ))}
+              </div>
+            </>)}
+            {imp.isPdf && (<>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:4px')}>
+                {backBtn('‹ Sources', v.impBack)}
+                <span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>Import PDF</span><span style={{ width: 80 }}></span>
+              </div>
+              <div style={s(`display:flex;gap:14px;align-items:center;background:${t.surface};border-radius:22px;padding:14px`)}>
+                <div style={s(`width:54px;height:68px;flex:none;border-radius:10px;background:repeating-linear-gradient(135deg,oklch(0.9 0.06 350) 0 6px,oklch(0.86 0.07 350) 6px 12px);display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;font:700 10px 'DM Sans';color:#2a2233`)}>PDF</div>
+                <div style={{ minWidth: 0 }}><div style={s(`font:700 15px 'DM Sans';overflow:hidden;text-overflow:ellipsis;white-space:nowrap`)}>RICORUMI_Shrooom.pdf</div><div style={s(`font-size:12px;color:${t.muted};margin-top:3px`)}>36 pages · Rico Design · 2024</div></div>
+              </div>
+              {imp.analyzing && (
+                <div style={s('display:flex;flex-direction:column;gap:10px;padding:8px 4px')}>
+                  {imp.steps.map((st, i) => (
+                    <div key={i} style={s(`display:flex;gap:10px;align-items:center;font-size:14px;opacity:${st.opacity}`)}><span style={s(`width:22px;height:22px;border-radius:11px;background:${st.bg};display:flex;align-items:center;justify-content:center;font:700 11px 'DM Sans';color:#2a2233;animation:${st.anim}`)}>{st.mark}</span>{st.label}</div>
+                  ))}
+                </div>
+              )}
+              {imp.ready && (<>
+                <div style={s(`border-radius:22px;padding:14px;background:${t.surface};display:flex;flex-direction:column;gap:10px`)}>
+                  <div style={s('display:flex;justify-content:space-between;align-items:center;gap:8px')}><span style={s(`font:700 14px 'DM Sans'`)}>Terminologie du PDF</span><span style={s(`font:600 11px 'DM Sans';color:${t.muted}`)}>détectée p. 31</span></div>
+                  <div style={s(`display:grid;grid-template-columns:1fr 1fr;background:${t.chip};border-radius:14px;padding:4px`)}>
+                    {imp.terms.map(tm => <button key={tm.k} onClick={tm.onClick} style={s(`height:36px;border-radius:11px;border:0;background:${tm.bg};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>{tm.label}</button>)}
+                  </div>
+                  <div style={s(`font:500 13px/1.4 ui-monospace,Menlo,monospace;color:${t.muted}`)}>{imp.sampleSrc}</div>
+                  <div style={s('font-size:15px;line-height:1.4;display:flex;gap:8px')}><b style={{ flex: 'none' }}>{imp.sampleLabel}</b><span>{hlText(imp.sampleParts)}</span></div>
+                  <div style={s(`display:${imp.warnDisplay};font-size:12px;line-height:1.4;border-radius:12px;padding:9px 11px;background:oklch(0.9 0.08 60);color:#4a2e10`)}>Avec la terminologie US, « dc » deviendrait une bride : les pièces seraient deux fois plus hautes.</div>
+                </div>
+                <div style={s('display:flex;justify-content:space-between;align-items:baseline;padding:4px 4px 0')}><span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>{imp.foundLabel}</span><button onClick={imp.toggleAll} style={s(`border:0;background:transparent;color:${t.ink};font:600 13px 'DM Sans';text-decoration:underline;cursor:pointer`)}>{imp.allLabel}</button></div>
+                <div style={s('display:flex;flex-direction:column;gap:8px')}>
+                  {imp.models.map(md => (
+                    <button key={md.id} onClick={md.onClick} role="checkbox" aria-checked={!!md.check} style={s(`cursor:pointer;border:0;text-align:left;color:${t.ink};display:flex;gap:12px;align-items:center;border-radius:18px;padding:10px 12px;background:${t.surface}`)}>
+                      <span style={s(`flex:none;width:26px;height:26px;border-radius:9px;border:2px solid ${md.boxBorder};background:${md.boxBg};color:#2a2233;display:flex;align-items:center;justify-content:center;font:700 14px 'DM Sans'`)}>{md.check}</span>
+                      <div style={s('flex:1;min-width:0')}><div style={s(`font:700 15px 'DM Sans'`)}>{md.name}</div><div style={s(`font-size:12px;color:${t.muted}`)}>{md.meta}</div></div>
+                      <div style={s('display:flex;gap:3px')}>{md.yarnDots.map((y, i) => <span key={i} title={y.name} style={s(`width:11px;height:11px;border-radius:6px;background:${y.hex}`)}></span>)}</div>
+                    </button>
+                  ))}
+                </div>
+                <button onClick={imp.confirm} style={s(`height:56px;flex:none;border-radius:28px;border:0;background:${imp.ctaBg};color:${imp.ctaColor};font:700 16px 'DM Sans';cursor:pointer`)}>{imp.ctaLabel}</button>
+              </>)}
+            </>)}
+            {imp.isPhoto && (<>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:4px')}>
+                {backBtn('‹ Sources', v.impBack)}
+                <span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>Import photo</span><span style={{ width: 80 }}></span>
+              </div>
+              {imp.noPhoto && (
+                <div style={s(`border-radius:24px;padding:18px;background:${t.surface};display:flex;flex-direction:column;gap:12px`)}>
+                  <div style={s(`font:700 18px 'Bricolage Grotesque',sans-serif`)}>Photographiez la page du pattern</div>
+                  <div style={s(`font-size:13px;line-height:1.5;color:${t.muted}`)}>Page à plat, bien éclairée, sans ombre. Le texte est lu automatiquement, puis vous le vérifiez avant d’enregistrer.</div>
+                  <button onClick={imp.pickPhoto} style={s(`height:52px;border-radius:26px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 15px 'DM Sans';cursor:pointer`)}>Choisir une photo</button>
+                  <button onClick={imp.useExample} style={s(`height:46px;border-radius:23px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Essayer avec « Les petits pois »</button>
+                </div>
+              )}
+              {imp.hasPhoto && (<>
+                <div style={s('border-radius:24px;overflow:hidden;background:#16121a;height:380px;flex:none;display:flex;align-items:center;justify-content:center')}>
+                  <div style={s(`width:${imp.boxW}px;height:${imp.boxH}px;background-size:contain;background-repeat:no-repeat;background-position:center;transform:rotate(${imp.rot}deg);transition:transform .25s`, { backgroundImage: imp.photoBg })}></div>
+                </div>
+                <div style={s('display:flex;gap:8px')}>
+                  <button onClick={imp.rotL} title="Pivoter à gauche" aria-label="Pivoter à gauche" style={s(`width:46px;height:46px;border-radius:23px;border:0;background:${t.chip};color:${t.ink};font:600 18px 'DM Sans';cursor:pointer`)}>↺</button>
+                  <button onClick={imp.rotR} title="Pivoter à droite" aria-label="Pivoter à droite" style={s(`width:46px;height:46px;border-radius:23px;border:0;background:${t.chip};color:${t.ink};font:600 18px 'DM Sans';cursor:pointer`)}>↻</button>
+                  <button onClick={imp.clearPhoto} style={s(`height:46px;padding:0 16px;border-radius:23px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Changer</button>
+                </div>
+                {imp.reading && (
+                  <div style={s('display:flex;flex-direction:column;gap:8px;padding:4px')}>
+                    <div style={s(`display:flex;justify-content:space-between;font:600 14px 'DM Sans'`)}><span>{imp.readLabel}</span><span>{imp.progress} %</span></div>
+                    <div style={s(`height:8px;border-radius:4px;background:${t.chip};overflow:hidden`)}><div style={s(`height:100%;width:${imp.progress}%;background:oklch(0.75 0.15 350);transition:width .3s`)}></div></div>
+                  </div>
+                )}
+                {imp.canRead && <button onClick={imp.read} style={s(`height:56px;flex:none;border-radius:28px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 16px 'DM Sans';cursor:pointer`)}>Lire le texte</button>}
+                <div style={s(`display:${imp.errDisplay};font-size:13px;line-height:1.4;border-radius:14px;padding:10px 12px;background:oklch(0.9 0.08 60);color:#4a2e10`)}>{imp.err}</div>
+              </>)}
+            </>)}
+            {imp.isPaste && (<>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:4px')}>
+                {backBtn('‹ Sources', v.impBack)}
+                <button onClick={v.save} style={s(`height:40px;padding:0 16px;border-radius:20px;border:0;background:${v.saveBg};color:${v.saveColor};font:700 14px 'DM Sans';cursor:pointer`)}>Enregistrer</button>
+              </div>
+              {v.draftHasPhoto && (
+                <div style={s(`display:flex;gap:12px;align-items:center;border-radius:18px;padding:10px;background:${t.surface}`)}>
+                  <div style={s('flex:none;width:52px;height:68px;border-radius:10px;background-size:cover;background-position:center top', { backgroundImage: v.draftPhotoBg })}></div>
+                  <div style={s(`font-size:13px;line-height:1.4;color:${t.muted}`)}><b style={{ color: t.ink }}>Texte lu depuis la photo.</b> Vérifiez l’aperçu et corrigez dans « Texte source » si besoin. La photo deviendra la couverture.</div>
+                </div>
+              )}
+              <input value={v.draft.name} onChange={v.onName} placeholder="Nom du pattern" aria-label="Nom du pattern" style={s(`border:0;background:transparent;outline:none;font:800 30px 'Bricolage Grotesque',sans-serif;color:${t.ink};padding:4px 0;width:100%`)} />
+              <div style={s('display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:10px')}>
+                {field('Créatrice / source', v.draft.designer, v.onDesigner, { placeholder: 'ex. Blog Fil & Thé' })}
+                {field('Crochet', v.draft.hook, v.onHook, { placeholder: '3 mm' })}
+              </div>
+              {catChipRow(v.catChips)}
+              {newCatRow}
+              {diffRow(v.diffChips)}
+              <div style={s('display:flex;flex-direction:column;gap:6px')}>
+                <span style={s(`font:600 13px 'DM Sans'`)}>Terminologie du texte collé</span>
+                <div style={s(`display:grid;grid-template-columns:repeat(3,1fr);background:${t.chip};border-radius:14px;padding:4px`)}>
+                  {v.termChips.map(tm => <button key={tm.k} onClick={tm.onClick} style={s(`height:36px;border-radius:11px;border:0;background:${tm.bg};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>{tm.label}</button>)}
+                </div>
+              </div>
+              <div style={s(`display:grid;grid-template-columns:1fr 1fr;background:${t.chip};border-radius:16px;padding:4px`)}>
+                <button onClick={v.tabSource} style={s(`height:38px;border-radius:12px;border:0;background:${v.srcTabBg};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Texte source</button>
+                <button onClick={v.tabPreview} style={s(`height:38px;border-radius:12px;border:0;background:${v.prevTabBg};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Aperçu · {v.parsedRowCount} rangs</button>
+              </div>
+              {v.isSourceTab && (<>
+                <textarea value={v.draft.raw} onChange={v.onRaw} aria-label="Texte source" placeholder="Collez le pattern ici. Une ligne par rang : « Rnd 2: [2 dc into next st] 6 times. 12 sts. »" style={s(`width:100%;min-height:230px;flex:none;resize:vertical;border:0;border-radius:18px;padding:14px;background:${t.surface};color:${t.ink};font-size:14px;line-height:1.55;outline:none`)}></textarea>
+                <button onClick={v.pasteExample} style={s(`align-self:flex-start;height:38px;padding:0 14px;border-radius:19px;border:0;background:${t.chip};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>Coller un exemple</button>
+              </>)}
+              {v.isPreviewTab && (<>
+                <div style={s(`font-size:13px;color:${t.muted}`)}>{v.previewSummary}</div>
+                <div style={s('display:flex;flex-direction:column;gap:4px')}>
+                  {v.preview.map((r, i) => r.isSection
+                    ? <div key={i} style={s(`font:700 17px 'Bricolage Grotesque',sans-serif;padding:10px 4px 2px`)}>{r.plain}</div>
+                    : r.isNote
+                    ? <div key={i} style={s(`font-size:13px;font-style:italic;color:${t.muted};padding:2px 4px 2px 54px`)}>{r.plain}</div>
+                    : (
+                    <div key={i} style={s(`display:flex;gap:10px;align-items:flex-start;padding:10px;border-radius:14px;background:${t.surface}`)}>
+                      <span style={s(`flex:none;min-width:40px;text-align:center;font:700 12px 'DM Sans';padding:4px 6px;border-radius:9px;background:${t.chip}`)}>{r.label}</span>
+                      <span style={s('flex:1;font-size:14px;line-height:1.45')}>{hlText(r.parts)}</span>
+                      <span style={s(`flex:none;font:600 12px 'DM Sans';color:${t.muted};padding-top:2px`)}>{r.count}</span>
+                    </div>
+                    ))}
+                </div>
+              </>)}
+            </>)}
+          </div>
+          )}
+
+          {/* ── Glossaire ── */}
+          {v.isGlossary && (
+          <div className="scr" style={s('flex:1;overflow-y:auto;padding:6px 20px 110px;display:flex;flex-direction:column;gap:12px')}>
+            <div style={s(`font:800 34px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;margin:8px 0 2px`)}>Glossaire</div>
+            <div style={s(`font-size:14px;color:${t.muted}`)}>Français · US · UK. Touchez un point pour le détail.</div>
+            <div style={s(`display:flex;align-items:center;gap:10px;background:${t.chip};border-radius:16px;padding:0 16px;height:46px;flex:none`)}>
+              <span aria-hidden="true" style={s(`color:${t.muted};font-size:17px`)}>⌕</span>
+              <input value={v.gq} onChange={v.onGq} placeholder="ms, dc, htr, picot…" aria-label="Rechercher un point" style={s(`flex:1;min-width:0;border:0;background:transparent;font-size:15px;outline:none;color:${t.ink}`)} />
+            </div>
+            {v.gloss.map(g => (
+              <button key={g.fr} onClick={g.onClick} aria-expanded={g.descDisplay === 'block'} style={s(`cursor:pointer;border:0;text-align:left;color:${t.ink};border-radius:20px;padding:14px 16px;background:${g.bg};display:flex;flex-direction:column;gap:8px`)}>
+                <div style={s('display:flex;align-items:center;gap:12px;width:100%')}>
+                  <span style={s(`flex:none;min-width:64px;font:800 22px/1 'Bricolage Grotesque',sans-serif`)}>{g.fr}</span>
+                  <span style={s(`flex:1;font:600 14px 'DM Sans';line-height:1.25`)}>{g.name}</span>
+                  <span style={s(`display:${g.warnDisplay};flex:none;font:700 10px 'DM Sans';letter-spacing:.05em;text-transform:uppercase;padding:4px 7px;border-radius:8px;background:oklch(0.9 0.08 60);color:#4a2e10`)}>Piège</span>
+                </div>
+                <div style={s('display:flex;gap:6px;flex-wrap:wrap')}>
+                  <span style={s(`font:600 12px 'DM Sans';padding:4px 9px;border-radius:9px;background:${t.pillOnTint}`)}>US · {g.us}</span>
+                  <span style={s(`font:600 12px 'DM Sans';padding:4px 9px;border-radius:9px;background:${t.pillOnTint}`)}>UK · {g.uk}</span>
+                </div>
+                <div style={s(`display:${g.descDisplay};font-size:14px;line-height:1.45;color:${t.mutedOnTint}`)}>{g.desc}</div>
+              </button>
+            ))}
+          </div>
+          )}
+
+          {/* ── Alerte modification ── */}
+          {warn.show && (
+          <div onClick={warn.cancel} style={s('position:absolute;inset:0;z-index:20;background:rgba(22,18,26,.45);display:flex;align-items:flex-end;padding:12px')}>
+            <div onClick={warn.stop} role="dialog" aria-modal="true" aria-label={warn.title} style={s(`width:100%;border-radius:30px;padding:22px 20px 18px;background:${t.surface};color:${t.ink};display:flex;flex-direction:column;gap:12px;box-shadow:0 -10px 40px -10px rgba(0,0,0,.4)`)}>
+              <div style={s(`font:800 22px/1.1 'Bricolage Grotesque',sans-serif`)}>{warn.title}</div>
+              <div style={s(`font-size:14px;line-height:1.45;color:${t.muted}`)}>Modifier les tours peut décaler leur avancement. Vous pouvez travailler sur une copie à la place.</div>
+              <div style={s('display:flex;flex-direction:column;gap:6px')}>
+                {warn.projects.map(w => <div key={w.id} style={s(`display:flex;justify-content:space-between;gap:10px;font-size:13px;padding:8px 12px;border-radius:12px;background:${t.chip}`)}><span style={{ fontWeight: 600 }}>{w.title}</span><span style={{ color: t.muted }}>{w.info}</span></div>)}
+              </div>
+              <button onClick={warn.copy} style={s(`height:52px;border-radius:26px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 15px 'DM Sans';cursor:pointer;margin-top:4px`)}>Créer une copie du pattern</button>
+              <button onClick={warn.anyway} style={s(`height:48px;border-radius:24px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Modifier quand même</button>
+              <button onClick={warn.cancel} style={s(`height:44px;border-radius:22px;border:0;background:transparent;color:${t.muted};font:600 14px 'DM Sans';cursor:pointer`)}>Annuler</button>
+            </div>
+          </div>
+          )}
+
+          {/* ── Barre d'onglets ── */}
+          {v.showTabs && (
+          <nav style={s(`position:absolute;left:0;right:0;bottom:0;height:calc(64px + max(22px, env(safe-area-inset-bottom)));padding:8px 14px max(22px, env(safe-area-inset-bottom));background:${t.bar};backdrop-filter:blur(12px);display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid ${t.chip}`)}>
+            {v.tabs.map(tb => (
+              <button key={tb.k} onClick={tb.onClick} style={s(`border:0;background:transparent;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:3px;color:${tb.color}`)}>
+                <span aria-hidden="true" style={s(`width:52px;height:30px;border-radius:15px;background:${tb.bg};display:flex;align-items:center;justify-content:center;font:800 15px 'Bricolage Grotesque',sans-serif`)}>{tb.glyph}</span>
+                <span style={s(`font:600 11px 'DM Sans'`)}>{tb.label}</span>
+              </button>
+            ))}
+          </nav>
+          )}
+        </div>
+      </div>
+    );
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+<script>
+  // Offline support (only works once the app is served over https, e.g. GitHub Pages).
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
+</body>
+</html>
