@@ -68,24 +68,25 @@ function s(css, extra) {
   return extra ? { ...o, ...extra } : o;
 }
 
-const CATS = { Amigurumi: 350, 'Vêtement': 295, 'Déco': 165, Accessoire: 80, Couverture: 235 };
+const CATS = { Amigurumi: 350, 'Vêtement': 295, 'Déco': 165, Accessoire: 80, Couverture: 235, 'Granny square': 30 };
 const LSC = 'maille-v4-cats';
 const hueOf = name => { let h = 0; for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
 const DIFF = ['', 'Facile', 'Moyen', 'Avancé'];
 const LSP = 'maille-v4-patterns', LSJ = 'maille-v4-projects';
+// Pièces à faire plusieurs fois : « Chapeau (x5) » → 5 compteurs indépendants.
+// Le n° 1 garde la clé d'origine (i), donc l'avancement déjà enregistré est conservé ; les suivants : "i.2", "i.3"…
+const copiesOf = name => { const m = name.match(/[(\s][x×]\s*(\d{1,2})\s*\)?\s*$/i); return m ? Math.max(1, Math.min(30, +m[1])) : 1; };
+const progKey = (i, c) => c ? `${i}.${c + 1}` : String(i);
+const doneOf = (prog, pt, i, c) => Math.min((prog || {})[progKey(i, c)] || 0, pt.steps.length);
+const firstOpen = (prog, pt, i) => { for (let c = 0; c < pt.copies; c++) if (doneOf(prog, pt, i, c) < pt.steps.length) return c; return -1; };
+// Info absente (vide, « — » ou « À compléter ») : on n'affiche rien.
+// ('' ou le texte, toujours une chaîne)
+const info = v => { const x = v == null ? '' : String(v).trim(); return /^(—|-|à compléter)$/i.test(x) ? '' : x; };
 function progInfo(prog, parts) {
   prog = prog || {}; let done = 0, total = 0;
-  parts.forEach((pt, i) => { total += pt.steps.length; done += Math.min(prog[i] || 0, pt.steps.length); });
+  parts.forEach((pt, i) => { total += pt.steps.length * pt.copies; for (let c = 0; c < pt.copies; c++) done += doneOf(prog, pt, i, c); });
   const pct = total ? Math.round(done / total * 100) : 0;
   return { done, total, pct, line: done === 0 ? 'Pas commencé' : done >= total ? 'Terminé ✓' : done + '/' + total + ' tours · ' + pct + ' %' };
-}
-function dsl(src) {
-  return src.trim().split('\n').map(l => l.trim()).filter(Boolean).map(l => {
-    if (l.startsWith('## ')) return { type: 'section', text: l.slice(3) };
-    if (l.startsWith('> ')) return { type: 'note', text: l.slice(2) };
-    const [label, text, count] = l.split('|').map(x => x.trim());
-    return { type: 'row', label, text, count: count || '' };
-  });
 }
 function rowSteps(label) {
   const m = label.match(/^([A-Za-z]+)\s*(\d+)[a-z]?\s*[–-]\s*(\d+)$/);
@@ -95,8 +96,9 @@ function rowSteps(label) {
 function buildParts(rows) {
   const parts = []; let part = null;
   rows.forEach(r => {
-    if (r.type === 'section') { part = { name: r.text, items: [], steps: [] }; parts.push(part); return; }
-    if (!part) { part = { name: 'Pattern', items: [], steps: [] }; parts.push(part); }
+    if (r.type === 'section') { part = { name: r.text, items: [], steps: [], diag: [], copies: copiesOf(r.text) }; parts.push(part); return; }
+    if (!part) { part = { name: 'Pattern', items: [], steps: [], diag: [], copies: 1 }; parts.push(part); }
+    if (r.type === 'diag') { part.diag.push(r.text); return; }
     if (r.type === 'note') { part.items.push({ ...r }); return; }
     const st = rowSteps(r.label);
     part.items.push({ ...r, offset: part.steps.length, n: st.length, stepLabels: st });
@@ -105,51 +107,7 @@ function buildParts(rows) {
   return parts;
 }
 
-// ── Données de démo ──
-const OWN = [
-  { id: 'o1', name: 'Petite baleine', designer: 'Lina Moreau', category: 'Amigurumi', hook: '3 mm', size: '9 cm', diff: 1, yarns: [['bleu ciel', '#8ec5ea']], rows: dsl(`
-## Corps
-T1 | En bleu ciel, 6 ms dans un CM | 6
-T2 | 6 aug | 12
-T3 | *1 ms, 1 aug* x6 | 18
-T4 | *2 ms, 1 aug* x6 | 24
-T5 | *3 ms, 1 aug* x6 | 30
-T6–10 | 30 ms | 30
-> Placer les yeux de sécurité entre T8 et T9, 6 m d'écart.
-T11 | *3 ms, 1 dim* x6 | 24
-T12 | *2 ms, 1 dim* x6 | 18
-T13 | *1 ms, 1 dim* x6 | 12
-> Rembourrer fermement.
-T14 | 6 dim | 6
-## Queue
-T1 | 6 ms dans un CM | 6
-T2 | *1 ms, 1 aug* x3 | 9
-T3–5 | 9 ms | 9`) },
-  { id: 'o2', name: 'Cardigan Pâquerette', designer: 'Atelier Nuage', category: 'Vêtement', hook: '5 mm', size: 'T38', diff: 2, yarns: [['écru', '#efe6d2']], rows: dsl(`
-## Dos
-R1 | 62 ml, 1 ms dans la 2e ml et chaque ml | 61
-R2 | 1 ml, tourner, 1 ms dans chaque m | 61
-R3–40 | Répéter R2 | 61
-## Devants (x2)
-R1 | 32 ml, 1 ms dans la 2e ml et chaque ml | 31
-R2–38 | 1 ml, tourner, 1 ms dans chaque m | 31`) },
-  { id: 'o3', name: 'Sous-verres arc-en-ciel', designer: 'Mes créations', category: 'Déco', hook: '4 mm', size: '10 cm', diff: 1, yarns: [['rose', '#f4a3c0'], ['jaune', '#f5d76e'], ['menthe', '#8fd6b4']], rows: dsl(`
-T1 | En rose, 12 br dans un CM, fermer par 1 mc | 12
-T2 | En jaune, 3 ml, 1 br dans la même m, 2 br dans chaque m | 24
-T3 | *1 br, 2 br dans la m suiv.* x12 | 36
-T4 | En menthe, 1 ms dans chaque m, arrêter | 36`) },
-];
 
-const PROJ0 = [
-  { id: 'j1', patternId: 'o1', prog: { 0: 7, 1: 1 }, activePart: 0, touched: 2, title: 'Baleine pour bébé Inès', forWhom: 'Inès', due: '2026-12-20', status: 'doing', start: '2026-11-02', end: '', hours: 3, description: '', photo: '', comments: [{ d: '2026-11-10', text: 'Yeux posés un peu trop bas, à surveiller pour la prochaine.' }] },
-  { id: 'j8', patternId: 'o1', prog: {}, title: 'Baleine pour Noé', forWhom: 'Noé', due: '2027-01-20', status: 'todo', start: '', end: '', hours: '', description: '', photo: '', comments: [] },
-  { id: 'j2', patternId: 'o2', title: '', forWhom: 'Moi', due: '2027-02-15', status: 'todo', start: '', end: '', hours: '', description: '', photo: '', comments: [] },
-  { id: 'j3', patternId: null, title: 'Réparer le bonnet de Jules', forWhom: 'Jules', due: '2026-11-30', status: 'todo', start: '', end: '', hours: '', description: 'Recoudre le pompon et reprendre les 2 derniers rangs de côtes (fil marine, crochet 4 mm).', photo: '', comments: [] },
-  { id: 'j4', patternId: 'o3', prog: { 0: 4 }, title: 'Sous-verres pour Maman', forWhom: 'Maman', due: '', status: 'done', start: '2026-09-03', end: '2026-09-10', hours: 4, description: '', photo: '', comments: [{ d: '2026-09-10', text: 'Faire 6 la prochaine fois, 4 c’est trop peu.' }] },
-  { id: 'j5', patternId: null, title: 'Doudou lapin', forWhom: 'Camille', due: '', status: 'done', start: '2026-07-12', end: '2026-08-01', hours: 14, description: 'Lapin aux longues oreilles, coton rose poudré.', photo: '', comments: [] },
-  { id: 'j6', patternId: null, title: 'Bob d’été', forWhom: 'Moi', due: '', status: 'done', start: '2026-06-01', end: '2026-06-09', hours: 7, description: 'Raphia naturel, 4,5 mm.', photo: '', comments: [] },
-  { id: 'j7', patternId: null, title: 'Tote bag granny', forWhom: 'Lucie', due: '', status: 'done', start: '2026-10-05', end: '2026-10-26', hours: 11, description: '', photo: '', comments: [] },
-];
 
 const GLOSS = [
   { fr: 'ml', name: 'maille en l’air', us: 'ch', uk: 'ch', desc: 'Un jeté tiré à travers la boucle du crochet. Base des chaînettes.' },
@@ -180,6 +138,27 @@ function mkConv(term) {
   return { map, re };
 }
 const CONV = { uk: mkConv('uk'), us: mkConv('us') };
+// Notation : [1 ms, 1 aug] x6 = répétition ; (1 br, 2 ml, 1 br) dans la m suiv. = même maille.
+// L'ancienne écriture (*…* x6 et […] dans la m suiv.) est convertie automatiquement.
+const repNorm = tx => tx.replace(/\[([^\[\]]*)\](?=\s+(?:dans|into|in)\b)/gi, '($1)').replace(/\*([^*]+)\*(\s*[x×]\s*\d+)/g, '[$1]$2');
+const repMigrate = p => ({ ...p, rows: (p.rows || []).map(r => r.type === 'row' && r.text ? { ...r, text: repNorm(r.text) } : r) });
+// Changements de couleur : « en blanc » dans un tour, si « blanc » est dans les fils du pattern.
+// Renvoie des morceaux { name, hex, text } : la pastille, puis les mailles faites dans cette couleur.
+function colorSegs(text, yarns) {
+  const ys = (yarns || []).filter(y => y[0].trim()).sort((a, b) => b[0].length - a[0].length);
+  if (!ys.length) return [{ text }];
+  const esc = x => x.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  const re = new RegExp('(^|[\\s,;:(\\[])en\\s+(' + ys.map(y => esc(y[0])).join('|') + ')(?=$|[\\s,;:.)\\]])\\s*[,:]?\\s*', 'gi');
+  const out = []; let last = 0, cur = null, m;
+  const push = end => { const tx = text.slice(last, end).replace(/^\s+|\s+$/g, ''); if (cur || tx) out.push({ ...(cur || {}), text: tx }); };
+  while ((m = re.exec(text))) {
+    push(m.index + m[1].length);
+    const key = m[2].toLowerCase().replace(/\s+/g, ' '), y = ys.find(z => z[0].trim().toLowerCase().replace(/\s+/g, ' ') === key);
+    cur = { name: y[0].trim(), hex: y[1] }; last = m.index + m[0].length;
+  }
+  push(text.length);
+  return out;
+}
 function convertParts(text, term) {
   if (term === 'fr') {
     const out = []; let last = 0, m; const re = /m\.\s?[slc](?:\.|\b)|\baug\.|\bdim\.|demi-?br\.|\bbr\.|cercle magique/gi;
@@ -191,7 +170,7 @@ function convertParts(text, term) {
   const base = term === 'uk' ? 'dc' : 'sc';
   text = text.replace(new RegExp('\\[2 ' + base + ' (?:into|in) next st\\]\\s*(\\d+)\\s*times', 'gi'), '$1 inc')
     .replace(new RegExp('\\b2 ' + base + ' (?:into|in) next st\\b', 'gi'), '1 inc')
-    .replace(/\[([^\]]+)\]\s*(\d+)\s*times/gi, '*$1* x$2').replace(/^In ([a-z ]+),/i, 'En $1,');
+    .replace(/\[([^\]]+)\]\s*(\d+)\s*times/gi, '[$1] x$2').replace(/^In ([a-z ]+),/i, 'En $1,');
   const { map, re } = CONV[term];
   const out = []; let last = 0; let m; re.lastIndex = 0;
   while ((m = re.exec(text))) {
@@ -213,26 +192,6 @@ function reflow(text) {
   });
   return out.join('\n');
 }
-const PEAS = `POIS × 4
-En vert clair.
-Tr 1 : 6 m. s. dans 1 cercle magique (6 m.).
-Tr 2 : 6 aug. (12 m.).
-Trs 3 et 4 : 12 m. s. (12 m.).
-Tr 5 : 6 dim. (6 m.).
-Rembourrer fermement. Fermer et rentrer le fil.
-COSSE
-En vert foncé.
-Tr 1 : Faire 1 chaînette de 18 m. l., 1 m. s. dans la 2e m. en partant du crochet (marquer cette m. comme la 1re m. du tr), 15 m. s. le long de la chaînette, 3 m. s. dans la dernière m. de la chaînette, puis en remontant de l'autre côté de la chaînette : 15 m. s., 1 aug. dans la dernière m. (36 m.).
-Tr 2 : 1 aug., 15 m. s., 1 aug., 1 m. s., 1 aug., 15 m. s., 1 aug., 1 m. s. (40 m.).
-Tr 3 : 1 aug., 17 m. s., 3 aug., 17 m. s., 2 aug. (46 m.).
-Tr 4 : 21 m. s., 2 aug., 21 m. s., 2 aug. (50 m.).
-Tr 5 : 50 m. s. (50 m.).
-Tr 6 : 48 m. s., 1 m. c. Aplatir la cosse de façon à ce que cette 49e m. soit à une extrémité. La dernière m. du tr doit être faite en crochetant les 2 épaisseurs ensemble : piquer le crochet dans la m. suivante (la 50e du tr 5) et dans la m. précédente (la 48e du tr 6, de l'arrière vers l'avant) et faire 1 m. c. (50 m.).
-Tr 7 : Faire 2 autres m. c. en crochetant les 2 épaisseurs ensemble ; continuer en crochetant 1 seule épaisseur de la cosse : 18 m. c., 3 m. s., 1 m. c. ; crocheter à nouveau les 2 épaisseurs ensemble : piquer le crochet dans la m. suivante (la 25e du tr 6) et dans la m. précédente (la 23e du tr 7, de l'arrière vers l'avant) et faire 1 m. c., faire 2 m. c. supplémentaires de cette façon ; finir le tr en crochetant 1 seule épaisseur de la cosse : 18 m. c.
-Arrêter le fil sur l'envers de la cosse.
-TIGE
-En vert foncé. Les explications sont décomposées en 3 parties mais il faut tout crocheter à la suite avec le même fil.
-Laisser 15 cm de fil au démarrage avant le nœud coulant.`;
 function loadTesseract() {
   if (window.Tesseract) return Promise.resolve(window.Tesseract);
   return new Promise((res, rej) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js'; sc.onload = () => res(window.Tesseract); sc.onerror = rej; document.head.appendChild(sc); });
@@ -240,6 +199,15 @@ function loadTesseract() {
 function parse(raw, term) {
   const items = [];
   raw.split('\n').map(l => l.trim()).filter(Boolean).forEach(line => {
+    // « @ … » : une ligne de schéma (voir parseDiag)
+    if (/^@\s/.test(line)) { items.push({ type: 'diag', parts: [], text: line.slice(1).trim() }); return; }
+    // « ## Pièce » et « > note » : forme explicite, gardée telle quelle
+    const ex = line.match(/^(##|>)\s*(.+)$/);
+    if (ex) {
+      const parts = term === 'fr' ? [{ text: ex[2], hl: false }] : convertParts(ex[2], term);
+      items.push({ type: ex[1] === '>' ? 'note' : 'section', parts, text: parts.map(p => p.text).join('') });
+      return;
+    }
     const m = line.match(LABEL_RE);
     if (m) {
       const isRow = /^(row|rang|rg|r$)/i.test(m[1]);
@@ -248,7 +216,7 @@ function parse(raw, term) {
       const c = body.match(/\s*\((\d+)\s*(?:m\.?|sts?|m)?\)\s*\.?$/i) || body.match(/[.,]?\s*(\d+)\s*sts?\.?\s*$/i);
       if (c) { count = +c[1]; body = body.slice(0, c.index); }
       body = body.replace(/\.\s*$/, '');
-      const parts = convertParts(body, term);
+      const parts = convertParts(repNorm(body), term);
       items.push({ type: 'row', label, count, parts, text: parts.map(p => p.text).join('') });
     } else if (/:$/.test(line) || (/[A-Z]/.test(line) && line === line.toUpperCase())) {
       const parts = convertParts(line.replace(/:$/, ''), term);
@@ -261,6 +229,53 @@ function parse(raw, term) {
     }
   });
   return items;
+}
+// Pattern → texte modifiable. « ## » ou « > » n'est ajouté que si la ligne serait mal relue sans.
+const rowsToText = rows => rows.map(r => {
+  if (r.type === 'diag') return '@ ' + r.text;
+  if (r.type === 'row') return `${r.label} : ${r.text}${r.count !== '' && r.count != null ? ` (${r.count})` : ''}`;
+  const plain = r.type === 'section' ? r.text.toUpperCase() : r.text;
+  const back = parse(plain, 'fr');
+  return back.length === 1 && back[0].type === r.type && back[0].text === r.text ? plain : (r.type === 'section' ? '## ' : '> ') + r.text;
+}).join('\n');
+
+// ── Fichier Maille (.txt) : un ou plusieurs patterns ──
+//   === Nom du pattern ===
+//   Créatrice : …   Livre : …   Page : …   Catégorie : …   Niveau : …   Crochet : …   Taille : …   (une info par ligne)
+//   Fils : vert #6fbf4a, vanille #f4e4b0
+//   ---
+//   CORPS
+//   T1 : En vert, 6 ms dans un CM (6)
+const plainKey = x => x.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
+const FM_HEAD = /^\s*={3,}\s*(.+?)\s*=*\s*$/;
+const FM_KEYS = { creatrice: 'designer', createur: 'designer', source: 'designer', auteur: 'designer', livre: 'kit', kit: 'kit', page: 'page', categorie: 'category', niveau: 'diff', crochet: 'hook', taille: 'size', fils: 'yarns', fil: 'yarns' };
+// Cuts a file into blocks, one per « === Nom === ». Text before the first title is ignored.
+function splitMaille(text, fallbackName) {
+  const blocks = [];
+  text.replace(/^﻿/, '').split(/\r?\n/).forEach(l => {
+    if (FM_HEAD.test(l)) blocks.push([l.trim()]); else if (blocks.length) blocks[blocks.length - 1].push(l);
+  });
+  if (!blocks.length) return [`=== ${fallbackName} ===\n${text.trim()}`];
+  return blocks.map(b => b.join('\n').trim());
+}
+function parseMaille(raw) {
+  const out = { name: '', designer: '', kit: '', page: '', category: '', diff: 1, hook: '', size: '', yarns: [] };
+  const lines = raw.split(/\r?\n/); let i = 0;
+  while (i < lines.length && !lines[i].trim()) i++;
+  const h = (lines[i] || '').match(FM_HEAD); if (h) { out.name = h[1]; i++; }
+  for (; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (/^-{3,}$/.test(l)) { i++; break; }
+    const m = l.match(/^([^:]+):\s*(.*)$/), key = m && Object.prototype.hasOwnProperty.call(FM_KEYS, plainKey(m[1])) && FM_KEYS[plainKey(m[1])];
+    if (!key) break;
+    const val = m[2].trim();
+    if (key === 'diff') { const d = plainKey(val); out.diff = /^(3|avance|difficile)/.test(d) ? 3 : /^(2|moyen|interm)/.test(d) ? 2 : 1; }
+    else if (key === 'yarns') out.yarns = val.split(/[,;]/).map(y => y.trim()).filter(Boolean).map(y => { const c = y.match(/^(.*?)\s*(#[0-9a-f]{6})?$/i); return [c[1].trim(), c[2] || '#c6a7e0']; }).filter(y => y[0]);
+    else out[key] = val;
+  }
+  out.rows = parse(lines.slice(i).join('\n'), 'fr').map(r => r.type === 'row' ? { type: 'row', label: r.label, text: r.text, count: r.count } : { type: r.type, text: r.text });
+  return out;
 }
 const EXAMPLE = `BODY
 Rnd 1: In green, working into a magic ring, 6 dc.
@@ -322,21 +337,76 @@ const TrashIcon = () => (
   </svg>
 );
 
+// ── Schémas (diagrammes de crochet) ──
+//   @ T1 | rose | br | x,y,angle  x,y,angle>x2,y2*n  …
+//   Tour (T0 = centre, toujours visible), couleur (nom dans « Fils »), symbole, puis les positions.
+//   « >x2,y2*n » répartit n symboles en ligne droite. Angle en degrés, sens horaire ; 0 = tête de la bride en haut.
+const SYM = { ml: 'maille en l’air', mlp: 'maille en l’air', mc: 'maille coulée', ms: 'maille serrée', 'demi-br': 'demi-bride', br: 'bride', db: 'double bride', n: '' };
+function parseDiag(lines) {
+  const out = [];
+  lines.forEach(l => {
+    const f = l.split('|').map(x => x.trim()); if (f.length < 4) return;
+    const sym = f[2].toLowerCase(); if (!(sym in SYM)) return;
+    const pts = [];
+    f[3].split(/\s+/).filter(Boolean).forEach(tok => {
+      const m = tok.match(/^(-?[\d.]+),(-?[\d.]+)(?:,(-?[\d.]+))?(?:>(-?[\d.]+),(-?[\d.]+)\*(\d+))?$/); if (!m) return;
+      const x = +m[1], y = +m[2], a = +(m[3] || 0), n = m[6] ? Math.min(300, +m[6]) : 1;
+      for (let i = 0; i < n; i++) { const k = n > 1 ? i / (n - 1) : 0; pts.push({ x: n > 1 ? x + (+m[4] - x) * k : x, y: n > 1 ? y + (+m[5] - y) * k : y, a }); }
+    });
+    if (pts.length) out.push({ tour: f[0].toUpperCase(), color: f[1], sym, pts });
+  });
+  return out;
+}
+function Diagram({ lines, yarns, current, t }) {
+  const [zoom, setZoom] = React.useState(false);
+  const groups = parseDiag(lines); if (!groups.length) return null;
+  const all = groups.flatMap(g => g.pts), pad = 80;
+  const x0 = Math.min(...all.map(p => p.x)) - pad, y0 = Math.min(...all.map(p => p.y)) - pad;
+  const w = Math.max(...all.map(p => p.x)) + pad - x0, h = Math.max(...all.map(p => p.y)) + pad - y0;
+  // Fond toujours clair ; un fil trop pâle est dessiné en gris pour rester visible.
+  const hexOf = name => { const y = (yarns || []).find(z => z[0].trim().toLowerCase() === name.toLowerCase()); const c = y && /^#[0-9a-f]{6}$/i.test(y[1]) ? y[1] : '#2a2233';
+    const [r, g, b] = [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)); return (0.3 * r + 0.59 * g + 0.11 * b) > 205 ? '#a39bad' : c; };
+  const shape = (sym, tour) => sym === 'ml' ? <ellipse rx="25" ry="14" /> : sym === 'mlp' ? <ellipse rx="15" ry="8" /> : sym === 'mc' ? <circle r="11" fill="currentColor" stroke="none" />
+    : sym === 'ms' ? <path d="M-17-17L17 17M17-17L-17 17" /> : sym === 'n' ? <text textAnchor="middle" dominantBaseline="central" fill="currentColor" stroke="none" fontSize="30" fontFamily="sans-serif" fontWeight="600">{tour.replace(/^\D+/, '')}</text>
+    : <path d={'M-22-54H22M0-54V56' + (sym === 'br' ? 'M-13-9L13 9' : sym === 'db' ? 'M-13-18L13 0M-13 4L13 22' : '')} />;
+  const known = !!current && groups.some(g => g.tour === current);
+  const legend = [...new Set(groups.map(g => g.sym === 'mlp' ? 'ml' : g.sym))].filter(x => x !== 'n');
+  return (
+    <div style={s(`border-radius:22px;background:#fdfbfc;color:#2a2233;margin-bottom:12px;padding:10px;box-shadow:0 0 0 1px ${t.chip}`)}>
+      <div style={s('overflow:auto;border-radius:14px;max-height:78vh')} onClick={() => setZoom(!zoom)}>
+        <svg viewBox={`${x0} ${y0} ${w} ${h}`} role="img" aria-label="Schéma du pattern" style={s(`display:block;width:${zoom ? '230%' : '100%'};cursor:${zoom ? 'zoom-out' : 'zoom-in'}`)}>
+          {groups.map((g, i) => {
+            const on = g.tour === current, dim = known && !on && g.tour !== 'T0';
+            return <g key={i} style={{ color: hexOf(g.color), opacity: dim ? .28 : 1 }} fill="none" stroke="currentColor" strokeWidth={known && on ? 9 : 6} strokeLinecap="round">
+              {g.pts.map((p, j) => <g key={j} transform={`translate(${p.x} ${p.y}) rotate(${p.a})`}>{shape(g.sym, g.tour)}</g>)}
+            </g>;
+          })}
+        </svg>
+      </div>
+      <div style={s(`display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;padding:8px 4px 0;font:600 12px 'DM Sans';color:#756c80`)}>
+        {legend.map(k => <span key={k} style={s('display:flex;align-items:center;gap:5px')}><svg aria-hidden="true" viewBox="-32 -62 64 124" width="13" height="25" style={{ color: '#2a2233' }}><g fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round">{shape(k, '')}</g></svg>{SYM[k]}</span>)}
+        <span style={{ marginLeft: 'auto' }}>{zoom ? 'Toucher pour réduire' : 'Toucher pour agrandir'}</span>
+      </div>
+    </div>
+  );
+}
+
 class App extends React.Component {
   constructor(props) {
     super(props);
     // Light / dark follows the phone's own setting.
     this.darkMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
     const dark = !!(this.darkMq && this.darkMq.matches);
-    this.state = { patterns: [...OWN], projects: PROJ0, screen: 'library', from: 'library', ctxProj: null, openId: 'o1', projId: 'j1', projTab: 'todo', fil: { fav: false, cats: [], diffs: [], srcs: [] }, cats: Object.keys(CATS), query: '', dark, partSel: null,
+    this.state = { patterns: [], projects: [], screen: 'library', from: 'library', ctxProj: null, openId: null, projId: null, projTab: 'todo', fil: { fav: false, cats: [], diffs: [], srcs: [] }, cats: Object.keys(CATS), query: '', dark, partSel: null,
       imp: { step: 'choose' }, draft: emptyDraft(), term: 'uk', tab: 'source', gq: '', gOpen: 'ms', commentDraft: '', trackOpen: false };
     this.fileRef = React.createRef();
     this.pdfRef = React.createRef();
+    this.txtRef = React.createRef();
   }
   componentDidMount() {
     if (this.darkMq) this.darkMq.addEventListener('change', this.onScheme);
     this.syncThemeColor();
-    try { const x = JSON.parse(localStorage.getItem(LSP)); if (Array.isArray(x) && x.length) this.setState({ patterns: x }); } catch (e) {}
+    try { const x = JSON.parse(localStorage.getItem(LSP)); if (Array.isArray(x) && x.length) { const y = x.map(repMigrate); this.setState({ patterns: y }); if (JSON.stringify(y) !== JSON.stringify(x)) this.persist(LSP, y); } } catch (e) {}
     try { const x = JSON.parse(localStorage.getItem(LSJ)); if (Array.isArray(x)) this.setState({ projects: x }); } catch (e) {}
     try { const x = JSON.parse(localStorage.getItem(LSC)); if (Array.isArray(x) && x.length) this.setState({ cats: x }); } catch (e) {}
   }
@@ -375,12 +445,7 @@ class App extends React.Component {
     const ph = this.state.imp.photo; if (!ph) return;
     this.setImp({ reading: true, progress: 0, err: '' });
     const done = text => this.setState(st => ({ imp: { ...st.imp, reading: false, step: 'paste' }, term: 'fr', tab: 'preview',
-      draft: { ...emptyDraft(), raw: text, cover: ph.src, name: ph.example ? 'Les petits pois' : '', designer: ph.example ? 'Livre · p. 50' : '', hook: ph.example ? '2,5 mm' : '', category: 'Déco', yarns: ph.example ? [['vert clair', '#9ccf6a'], ['vert foncé', '#3f8a3a']] : [] } }));
-    if (ph.example) {
-      clearInterval(this.timer);
-      this.timer = setInterval(() => { const p = Math.min(100, (this.state.imp.progress || 0) + 9); this.setImp({ progress: p }); if (p >= 100) { clearInterval(this.timer); done(PEAS); } }, 120);
-      return;
-    }
+      draft: { ...emptyDraft(), raw: text, cover: ph.src, category: 'Déco', yarns: [] } }));
     try {
       const T = await loadTesseract();
       const img = new Image(); img.src = ph.src; await img.decode();
@@ -392,6 +457,38 @@ class App extends React.Component {
     } catch (e) { this.setImp({ reading: false, err: 'La lecture a échoué (connexion ?). Réessayez, ou collez le texte à la main.' }); }
   }
   startPdf() { clearInterval(this.timer); this.pdfDoc = null; this.setImp({ step: 'pdf', pdf: null, pdfBusy: false, pdfErr: '', progress: 0, pdfThumb: '' }); }
+  // Fichier Maille (.txt)
+  startTxt() { clearInterval(this.timer); this.setImp({ step: 'txt', fm: null, fmErr: '' }); }
+  onTxt = async e => {
+    const files = [...(e.target.files || [])]; e.target.value = '';
+    if (!files.length) return;
+    try {
+      const blocks = [];
+      for (const f of files) {
+        const buf = await f.arrayBuffer(); let text;
+        try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (err) { text = new TextDecoder('windows-1252').decode(buf); }
+        splitMaille(text, f.name.replace(/\.[^.]+$/, '').replace(/_+/g, ' ').trim()).forEach(raw => {
+          const p = parseMaille(raw), n = plainKey(p.name);
+          blocks.push({ raw, open: false, on: p.rows.some(r => r.type === 'row') && !this.state.patterns.some(x => plainKey(x.name) === n) });
+        });
+      }
+      this.setImp({ fm: { name: files.length > 1 ? `${files.length} fichiers` : files[0].name, blocks }, fmErr: '' });
+    } catch (err) { console.warn(err); this.setImp({ fm: null, fmErr: 'Impossible de lire ce fichier. Est-ce bien un fichier texte (.txt) ?' }); }
+  };
+  setBlock(i, o) { this.setState(st => ({ imp: { ...st.imp, fm: { ...st.imp.fm, blocks: st.imp.fm.blocks.map((b, j) => j === i ? { ...b, ...o } : b) } } })); }
+  addBlocks(list) {
+    if (!list.length) return;
+    const stamp = Date.now(), cats = [...this.state.cats];
+    const added = list.map((p, i) => {
+      let category = cats.find(c => plainKey(c) === plainKey(p.category));
+      if (!category) { category = p.category || 'Amigurumi'; if (!cats.includes(category)) cats.push(category); }
+      return { id: `p${stamp}-${i}`, name: p.name.trim(), designer: p.designer || '', kit: p.kit || undefined, page: p.page || undefined, category, hook: p.hook || '—', size: p.size || '—', diff: p.diff, yarns: p.yarns, cover: '', rows: p.rows };
+    });
+    this.persist(LSC, cats);
+    this.setPatterns(ps => [...added, ...ps]);
+    this.setState(st => ({ cats, query: '', fil: { fav: false, cats: [], diffs: [], srcs: [] }, imp: { ...st.imp, step: 'choose', fm: null }, partSel: null, ctxProj: null, from: 'library',
+      ...(added.length === 1 ? { screen: 'detail', openId: added[0].id } : { screen: 'library' }) }));
+  }
   pickPdf() { this.pdfRef.current && this.pdfRef.current.click(); }
   onPdf = async e => {
     const f = e.target.files && e.target.files[0]; e.target.value = '';
@@ -479,15 +576,15 @@ class App extends React.Component {
     const deco = p => {
       const h = CATS[p.category] ?? hueOf(p.category || '');
       const parts = buildParts(p.rows);
-      const total = parts.reduce((a, x) => a + x.steps.length, 0);
+      const total = parts.reduce((a, x) => a + x.steps.length * x.copies, 0);
       const uses = projects.filter(j => j.patternId === p.id);
       const best = uses.filter(j => j.status !== 'done').map(j => progInfo(j.prog, parts).pct).sort((a, b) => b - a)[0] || 0;
       return { ...p, h, parts, total, tint: tint(h), strong: strong(h), pct: best,
         diffLabel: DIFF[p.diff || 1], diffDots: dots(p.diff || 1), hasCover: !!p.cover, noCover: !p.cover, coverBg: p.cover ? `url(${p.cover})` : 'none',
-        sourceLine: p.kit ? [p.kit, p.page ? 'p. ' + p.page : ''].filter(Boolean).join(' · ') : `${p.designer} · ${p.hook}`,
+        sourceLine: (info(p.kit) ? [info(p.kit), info(p.page) && 'p. ' + info(p.page)] : [info(p.designer), info(p.hook)]).filter(Boolean).join(' · '),
         partsLine: `${parts.length} pièce${parts.length > 1 ? 's' : ''} · ${total} tours` + (uses.length ? ` · ${uses.length} projet${uses.length > 1 ? 's' : ''}` : ''),
         yarnDots: (p.yarns || []).map(([name, hex]) => ({ name, hex })),
-        source: p.kit || p.designer || 'Mes créations',
+        source: info(p.kit) || info(p.designer),
         star: p.fav ? '★' : '☆', starColor: p.fav ? 'oklch(0.7 0.16 70)' : t.mutedOnTint,
         toggleFav: e => { e && e.stopPropagation && e.stopPropagation(); this.updPattern(p.id, x => ({ ...x, fav: !x.fav })); },
         open: () => this.setState({ screen: 'detail', from: 'library', ctxProj: null, openId: p.id, partSel: null }) };
@@ -503,7 +600,7 @@ class App extends React.Component {
     const sep = { isSep: true, isChip: false };
     const anyFil = fil.fav || fil.cats.length || fil.diffs.length || fil.srcs.length;
     const usedCats = cats.filter(c => all.some(p => p.category === c)).concat([...new Set(all.map(p => p.category))].filter(c => c && !cats.includes(c)));
-    const srcs = [...new Set(all.map(p => p.source))].sort((a, b) => a.localeCompare(b, 'fr'));
+    const srcs = [...new Set(all.map(p => p.source).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'fr'));
     const filters = [
       ...(anyFil ? [chip('✕ Effacer', false, () => this.setState({ fil: { fav: false, cats: [], diffs: [], srcs: [] } }), '')] : []),
       chip('★ Favoris', fil.fav, () => this.setState(st => ({ fil: { ...st.fil, fav: !st.fil.fav } })), all.filter(p => p.fav && match(p, 'fav')).length || ''), sep,
@@ -514,7 +611,7 @@ class App extends React.Component {
     const r0 = projects.filter(j => j.status !== 'done' && j.patternId).map(j => {
       const pat = all.find(p => p.id === j.patternId); if (!pat) return null;
       const info = progInfo(j.prog, pat.parts); const ap = j.activePart ?? 0, apart = pat.parts[ap] || pat.parts[0];
-      const st = apart.steps[Math.min((j.prog || {})[ap] || 0, apart.steps.length - 1)];
+      const ac = Math.min((j.copyAct || {})[ap] || 0, apart.copies - 1), st = apart.steps[Math.min(doneOf(j.prog, apart, ap, ac), apart.steps.length - 1)];
       return { ...info, touched: j.touched || 0, strong: pat.strong, name: j.title || pat.name, pctLabel: info.pct + ' %',
         resumeLabel: st ? st.label : '', resumeText: st ? `${apart.name} · ${st.row.text}` : '',
         open: () => this.setState({ screen: 'detail', from: 'library', ctxProj: j.id, openId: pat.id, partSel: null }) };
@@ -526,37 +623,50 @@ class App extends React.Component {
       const ctx = projects.find(j => j.id === this.state.ctxProj && j.patternId === o.id);
       const has = !!ctx, prog = has ? (ctx.prog || {}) : {};
       const updCtx = fn => has && this.updProject(ctx.id, j => ({ ...fn(j), touched: Date.now(), status: j.status === 'todo' ? 'doing' : j.status, start: j.start || today() }));
-      const ymap = Object.fromEntries((o.yarns || []).map(([n, h]) => [n.toLowerCase(), h]));
       const selI = Math.min(this.state.partSel ?? (has ? ctx.activePart : 0) ?? 0, o.parts.length - 1);
       const parts = o.parts.map((pt, i) => {
-        const n = pt.steps.length, d = Math.min(prog[i] || 0, n);
-        return { name: pt.name, pct: n ? Math.round(d / n * 100) : 0, label: n ? (d >= n ? 'Fini ✓' : `${d}/${n}`) : 'Notes',
+        const n = pt.steps.length * pt.copies; let d = 0, fin = 0;
+        for (let c = 0; c < pt.copies; c++) { const dc = doneOf(prog, pt, i, c); d += dc; if (dc >= pt.steps.length) fin++; }
+        return { name: pt.name, pct: n ? Math.round(d / n * 100) : 0, label: n ? (d >= n ? 'Fini ✓' : pt.copies > 1 && has ? `${fin}/${pt.copies} fini${fin > 1 ? 's' : ''}` : `${d}/${n}`) : 'Notes',
           dot: n && d >= n ? strong(165) : d > 0 ? accent : 'transparent', bg: i === selI ? o.tint : t.surface, border: i === selI ? o.strong : t.chip,
           onClick: () => this.setState({ partSel: i }) };
       });
-      const sp = o.parts[selI], n = sp.steps.length, d = Math.min(prog[selI] || 0, n);
+      const sp = o.parts[selI], n = sp.steps.length;
+      // Exemplaire affiché : le dernier choisi, sinon le premier pas fini
+      const pickedC = has ? (ctx.copyAct || {})[selI] : undefined;
+      const selC = pickedC != null && pickedC < sp.copies ? pickedC : Math.max(0, firstOpen(prog, sp, selI));
+      const d = doneOf(prog, sp, selI, selC), key = progKey(selI, selC), openC = firstOpen(prog, sp, selI);
+      const withCopy = (j, c) => ({ ...(j.copyAct || {}), [selI]: c });
       const items = sp.items.map(r => {
         if (r.type === 'note') return { ...r, isNote: true, isRow: false };
         const doneR = has && d >= r.offset + r.n, active = has && d >= r.offset && d < r.offset + r.n, inRow = active ? d - r.offset : 0;
-        const mm = r.text.match(/^En ([^,]+),/); const hex = mm && ymap[mm[1].toLowerCase()];
         return { ...r, isRow: true, isNote: false, label: doneR ? '✓ ' + r.label : r.label,
           bg: active ? o.tint : 'transparent', color: doneR ? t.muted : t.ink, deco: doneR ? 'line-through' : 'none', labelBg: active ? o.strong : t.chip,
-          dot: hex || 'transparent', dotDisplay: hex ? 'inline-block' : 'none',
+          segs: colorSegs(r.text, o.yarns),
           subDisplay: r.n > 1 && !doneR ? 'flex' : 'none',
           ticks: r.stepLabels.map((l, j) => ({ label: l, bg: (active && j < inRow) || doneR ? o.strong : (active && j === inRow ? t.surface : t.chip), color: '#2a2233' })),
-          onClick: () => updCtx(j => ({ prog: { ...(j.prog || {}), [selI]: r.offset }, activePart: selI })) };
+          onClick: () => updCtx(j => ({ prog: { ...(j.prog || {}), [key]: r.offset }, activePart: selI, copyAct: withCopy(j, selC) })) };
       });
       const cs = sp.steps[Math.min(d, n - 1)];
-      const sel = { name: sp.name, items, hasRows: has && n > 0, progressLabel: `${d}/${n}`,
-        curLabel: d >= n ? 'Fini ✓' : cs.label, groupInfo: d < n && cs.n > 1 ? `${cs.row.label} · ${cs.j + 1}/${cs.n}` : '' };
-      const step = dd => () => updCtx(j => { const pr = { ...(j.prog || {}) }; pr[selI] = Math.max(0, Math.min(n, (pr[selI] || 0) + dd)); return { prog: pr, activePart: selI }; });
+      const multi = sp.copies > 1;
+      const copies = multi && has && n > 0 ? Array.from({ length: sp.copies }, (_, c) => { const dc = doneOf(prog, sp, selI, c), on = c === selC;
+        return { c, on, label: `n° ${c + 1}`, info: dc >= n ? '✓' : dc ? `${dc}/${n}` : '', bg: on ? o.strong : t.chip, color: on ? '#2a2233' : t.ink,
+          onClick: () => this.updProject(ctx.id, j => ({ copyAct: withCopy(j, c) })) }; }) : [];
+      const sel = { name: multi ? `${sp.name.replace(/\s*\(?\s*[x×]\s*\d+\s*\)?\s*$/i, '')} n° ${selC + 1}` : sp.name, items, copies, diag: sp.diag, diagCur: has && d < n ? cs.label : null, hasRows: has && n > 0, progressLabel: `${d}/${n}`,
+        curLabel: d >= n ? 'Fini ✓' : cs.label, groupInfo: d < n && cs.n > 1 ? `${cs.row.label} · ${cs.j + 1}/${cs.n}` : d >= n && multi && openC >= 0 ? `+ pour le n° ${openC + 1}` : '' };
+      // « + » sur un exemplaire fini passe au prochain exemplaire à faire
+      const step = dd => () => updCtx(j => {
+        const cur0 = doneOf(j.prog, sp, selI, selC), next = firstOpen(j.prog, sp, selI);
+        if (dd > 0 && cur0 >= n && multi && next >= 0) return { activePart: selI, copyAct: withCopy(j, next) };
+        return { prog: { ...(j.prog || {}), [key]: Math.max(0, Math.min(n, cur0 + dd)) }, activePart: selI, copyAct: withCopy(j, selC) };
+      });
       inc = step(1); dec = step(-1);
       const ctxList = projects.filter(j => j.patternId === o.id).map(j => ({ id: j.id, title: j.title || o.name, sub: [j.forWhom ? 'Pour ' + j.forWhom : '', j.status === 'done' ? 'Fini' : j.status === 'doing' ? 'En cours' : 'À faire'].filter(Boolean).join(' · '),
         info: progInfo(j.prog, o.parts).pct + ' %', onClick: () => this.setState({ ctxProj: j.id, partSel: null }) }));
       const activeUses = projects.filter(j => j.patternId === o.id && j.status !== 'done' && (j.status === 'doing' || progInfo(j.prog, o.parts).done > 0));
-      const openEdit = (p, id) => this.setState({ editWarn: false, screen: 'edit', openId: id || p.id, edit: { id: id || p.id, name: p.name, designer: p.designer || '', kit: p.kit || '', page: p.page != null ? String(p.page) : '', hook: p.hook === '—' ? '' : (p.hook || ''), size: p.size === '—' ? '' : (p.size || ''), category: p.category, diff: p.diff || 1, yarns: (p.yarns || []).map(y => [...y]),
-          raw: p.rows.map(r => r.type === 'section' ? r.text.toUpperCase() : r.type === 'note' ? r.text : `${r.label} : ${r.text}${r.count !== '' && r.count != null ? ` (${r.count})` : ''}`).join('\n') } });
-      cur = { ...o, parts, sel, hasCtx: has, noCtx: !has, ctxTitle: has ? (ctx.title || o.name) + (ctx.forWhom ? ' · pour ' + ctx.forWhom : '') : '', ctxList, headLine: [o.kit || o.designer || '', o.page ? 'p. ' + o.page : ''].filter(Boolean).join(' · '), star: o.fav ? '★' : '☆', starColor: o.fav ? 'oklch(0.7 0.16 70)' : t.mutedOnTint, toggleFav: o.toggleFav,
+      const openEdit = (p, id) => this.setState({ editWarn: false, screen: 'edit', openId: id || p.id, edit: { id: id || p.id, name: p.name, designer: info(p.designer), kit: p.kit || '', page: p.page != null ? String(p.page) : '', hook: p.hook === '—' ? '' : (p.hook || ''), size: p.size === '—' ? '' : (p.size || ''), category: p.category, diff: p.diff || 1, yarns: (p.yarns || []).map(y => [...y]),
+          raw: rowsToText(p.rows) } });
+      cur = { ...o, parts, sel, hasCtx: has, noCtx: !has, ctxTitle: has ? (ctx.title || o.name) + (ctx.forWhom ? ' · pour ' + ctx.forWhom : '') : '', ctxList, headLine: [info(o.kit) || info(o.designer), info(o.page) && 'p. ' + info(o.page)].filter(Boolean).join(' · '), star: o.fav ? '★' : '☆', starColor: o.fav ? 'oklch(0.7 0.16 70)' : t.mutedOnTint, toggleFav: o.toggleFav,
         edit: () => { if (activeUses.length) this.setState({ editWarn: true }); else openEdit(o); },
       };
       warn = { show: !!this.state.editWarn && screen === 'detail',
@@ -642,16 +752,28 @@ class App extends React.Component {
     const parsed = parse(draft.raw, term);
     const parsedRows = parsed.filter(r => r.type === 'row');
     const convCount = parsed.reduce((a, r) => a + r.parts.filter(p => p.hl).length, 0);
-    const preview = parsed.map(r => ({ ...r, isRow: r.type === 'row', isSection: r.type === 'section', isNote: r.type === 'note', plain: r.text, parts: toParts(r.parts) }));
+    const preview = parsed.filter(r => r.type !== 'diag').map(r => ({ ...r, isRow: r.type === 'row', isSection: r.type === 'section', isNote: r.type === 'note', plain: r.text, parts: toParts(r.parts) }));
     const cantSave = !draft.name.trim() || !parsedRows.length;
     const P = imp.pdf;
+    const fmBlocks = (imp.fm ? imp.fm.blocks : []).map((b, i) => {
+      const p = parseMaille(b.raw), ps = buildParts(p.rows), tours = ps.reduce((a, x) => a + x.steps.length * x.copies, 0);
+      const ok = !!p.name.trim() && tours > 0, exists = patterns.some(x => plainKey(x.name) === plainKey(p.name)), on = ok && b.on;
+      return { p, ok, on, raw: b.raw, open: b.open, name: p.name || 'Sans nom',
+        meta: !p.name.trim() ? 'Il manque le nom (=== Nom ===)' : !tours ? 'Aucun tour trouvé' : `${ps.length} pièce${ps.length > 1 ? 's' : ''} · ${tours} tour${tours > 1 ? 's' : ''}${exists ? ' · ce nom existe déjà' : ''}`,
+        yarnDots: p.yarns.map(([name, hex]) => ({ name, hex })), boxBg: on ? accent : 'transparent', boxBorder: on ? accent : t.muted,
+        toggle: () => ok && this.setBlock(i, { on: !b.on }), toggleOpen: () => this.setBlock(i, { open: !b.open }), onRaw: e => this.setBlock(i, { raw: e.target.value }) };
+    });
+    const fmSel = fmBlocks.filter(b => b.on);
     const impV = {
+      isTxt: imp.step === 'txt', fm: imp.fm, fmErr: imp.fmErr || '', fmBlocks, pickTxt: () => this.txtRef.current && this.txtRef.current.click(),
+      fmCta: fmSel.length ? `Ajouter ${fmSel.length} pattern${fmSel.length > 1 ? 's' : ''}` : 'Cochez au moins un pattern',
+      fmCtaBg: fmSel.length ? accent : t.chip, fmCtaColor: fmSel.length ? '#2a2233' : t.muted, fmAdd: () => this.addBlocks(fmSel.map(b => b.p)),
       isChoose: imp.step === 'choose', isPdf: imp.step === 'pdf', isPhoto: imp.step === 'photo',
       noPhoto: !imp.photo, hasPhoto: !!imp.photo, photoBg: imp.photo ? `url(${imp.photo.src})` : 'none', rot: imp.photo ? imp.photo.rot : 0,
       boxW: imp.photo && imp.photo.rot % 180 ? 380 : 350, boxH: imp.photo && imp.photo.rot % 180 ? 350 : 380,
       reading: !!imp.reading, canRead: !!imp.photo && !imp.reading, progress: imp.progress || 0, readLabel: 'Lecture du texte…',
       err: imp.err || '', errDisplay: imp.err ? 'block' : 'none',
-      pickPhoto: () => this.pick({ kind: 'ocr' }), useExample: () => this.setImp({ photo: { src: 'assets/petits-pois.jpg', rot: 0, example: true }, err: '' }),
+      pickPhoto: () => this.pick({ kind: 'ocr' }),
       rotL: () => this.setImp({ photo: { ...imp.photo, rot: imp.photo.rot - 90 } }), rotR: () => this.setImp({ photo: { ...imp.photo, rot: imp.photo.rot + 90 } }),
       clearPhoto: () => { clearInterval(this.timer); this.setImp({ photo: null, reading: false, err: '' }); }, read: () => this.readPhoto(), isPaste: imp.step === 'paste',
       // PDF
@@ -663,10 +785,10 @@ class App extends React.Component {
         this.setImp({ pdf: { ...P, from: val, to: fr > 0 && !(to >= fr) ? val : P.to } }); this.previewPdfPage(val); }, onTo: e => this.setImp({ pdf: { ...P, to: e.target.value } }),
     };
     const sources = [
+      ['TXT', 'Fichier Maille', 'Texte prêt à importer', () => this.startTxt(), 165, true],
       ['PDF', 'PDF', 'Depuis vos fichiers', () => this.startPdf(), 350, true],
       ['Aa', 'Coller du texte', 'Blog, e-mail, notes', () => this.setState({ imp: { ...imp, step: 'paste' }, draft: emptyDraft(), tab: 'source' }), 295, true],
       ['◫', 'Photo', 'Livre, magazine', () => this.setImp({ step: 'photo', photo: null, reading: false, err: '' }), 80, true],
-      ['▶', 'Vidéo YouTube', 'Lien + notes · bientôt', null, 235, false],
     ].map(([glyph, label, sub, fn, h, on]) => ({ glyph, label, sub, on, bg: tint(h), opacity: on ? 1 : .55, cursor: on ? 'pointer' : 'default', onClick: fn || (() => {}) }));
     const gql = gq.trim().toLowerCase();
     const gloss = GLOSS.filter(g => !gql || [g.fr, g.name, g.us, g.uk].join(' ').toLowerCase().includes(gql)).map(g => ({ ...g,
@@ -711,7 +833,7 @@ class App extends React.Component {
         onChange: e => this.setState({ newCat: { open: true, value: e.target.value } }), onKey: e => { if (e.key === 'Enter') this.commitCategory(); if (e.key === 'Escape') this.setState({ newCat: { open: false, value: '' } }); },
         ok: () => this.commitCategory(), cancel: () => this.setState({ newCat: { open: false, value: '' } }) },
       showTabs: screen !== 'edit' && !warn.show, isEdit: screen === 'edit' && !!E, ed, warn,
-      query, onQuery: e => this.setState({ query: e.target.value }), filters, visible, isEmpty: !visible.length, hasResume: false, resume: r0 || {},
+      query, onQuery: e => this.setState({ query: e.target.value }), filters, visible, isEmpty: !visible.length, noPattern: !patterns.length, hasResume: false, resume: r0 || {},
       backLabel: fromProject ? '‹ Projet' : '‹ Patterns', goBack: () => this.setState({ screen: fromProject ? 'project' : 'library' }),
       cur, inc, dec,
       newProject: () => this.newProject(null, projTab), projTabs, projList, projEmpty: !projList.length, showStats: projTab === 'done' && fin.length > 0, stats, pj,
@@ -731,7 +853,7 @@ class App extends React.Component {
         if (cantSave) return;
         const id = 'p' + Date.now();
         const rows = parsed.map(r => r.type === 'row' ? { type: 'row', label: r.label, text: r.text, count: r.count } : { type: r.type, text: r.text });
-        this.setPatterns(ps => [{ id, name: draft.name.trim(), designer: draft.designer || 'Mes créations', category: draft.category, hook: draft.hook || '—', size: '—', diff: draft.diff, page: draft.page || undefined, yarns: draft.yarns || [], cover: draft.cover || '', prog: {}, rows }, ...ps]);
+        this.setPatterns(ps => [{ id, name: draft.name.trim(), designer: draft.designer || '', category: draft.category, hook: draft.hook || '—', size: '—', diff: draft.diff, page: draft.page || undefined, yarns: draft.yarns || [], cover: draft.cover || '', prog: {}, rows }, ...ps]);
         this.setState({ screen: 'detail', from: 'library', ctxProj: null, openId: id, partSel: null });
       },
       gq, onGq: e => this.setState({ gq: e.target.value }), gloss,
@@ -778,6 +900,7 @@ class App extends React.Component {
         <div style={s(`width:100%;max-width:480px;height:100%;background:${t.bg};color:${t.ink};overflow:hidden;position:relative;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top)`)}>
           <input type="file" accept="image/*" ref={this.fileRef} onChange={this.onFile} style={{ display: 'none' }} />
           <input type="file" accept="application/pdf,.pdf" ref={this.pdfRef} onChange={this.onPdf} style={{ display: 'none' }} />
+          <input type="file" accept="text/plain,.txt" multiple ref={this.txtRef} onChange={this.onTxt} style={{ display: 'none' }} />
 
           {/* ── Bibliothèque ── */}
           {v.isLibrary && (
@@ -817,7 +940,7 @@ class App extends React.Component {
                     </span>
                   </div>
                   <div style={s(`font:700 18px/1.1 'Bricolage Grotesque',sans-serif;margin-top:2px;text-wrap:pretty`)}>{p.name}</div>
-                  <div style={s(`font-size:12px;color:${t.mutedOnTint};line-height:1.3`)}>{p.sourceLine}</div>
+                  {p.sourceLine && <div style={s(`font-size:12px;color:${t.mutedOnTint};line-height:1.3`)}>{p.sourceLine}</div>}
                   <div style={s('display:flex;gap:4px')}>{p.yarnDots.map((y, i) => <span key={i} title={y.name} style={s(`width:12px;height:12px;border-radius:6px;background:${y.hex};box-shadow:0 0 0 1.5px ${t.pillOnTint}`)}></span>)}</div>
                   <div style={s('margin-top:auto;display:flex;flex-direction:column;gap:6px')}>
                     <div style={s(`font:600 11px 'DM Sans';color:${t.mutedOnTint}`)}>{p.partsLine}</div>
@@ -826,7 +949,7 @@ class App extends React.Component {
                 </div>
               ))}
             </div>
-            {v.isEmpty && <div style={s(`text-align:center;padding:40px 20px;color:${t.muted};font-size:14px`)}>Aucun pattern ne correspond.</div>}
+            {v.isEmpty && <div style={s(`text-align:center;padding:40px 20px;color:${t.muted};font-size:14px`)}>{v.noPattern ? 'Aucun pattern pour l’instant. Touchez « Importer » pour en ajouter.' : 'Aucun pattern ne correspond.'}</div>}
           </div>
           )}
 
@@ -848,9 +971,9 @@ class App extends React.Component {
                   {cur.noCover && <span>+ Photo</span>}
                 </button>
                 <div style={s('flex:1;min-width:0;display:flex;flex-direction:column;gap:5px')}>
-                  <div style={s(`font:600 11px 'DM Sans';letter-spacing:.06em;text-transform:uppercase;color:${t.mutedOnTint}`)}>{cur.headLine}</div>
+                  {cur.headLine && <div style={s(`font:600 11px 'DM Sans';letter-spacing:.06em;text-transform:uppercase;color:${t.mutedOnTint}`)}>{cur.headLine}</div>}
                   <div style={s(`font:800 28px/1 'Bricolage Grotesque',sans-serif;letter-spacing:-.02em;text-wrap:pretty`)}>{cur.name}</div>
-                  <div style={s(`font-size:12px;color:${t.mutedOnTint}`)}>{cur.hook} · {cur.size} · {cur.diffLabel}</div>
+                  <div style={s(`font-size:12px;color:${t.mutedOnTint}`)}>{[info(cur.hook), info(cur.size), cur.diffLabel].filter(Boolean).join(' · ')}</div>
                 </div>
               </div>
               <div style={s('display:flex;flex-wrap:wrap;gap:6px')}>
@@ -889,6 +1012,11 @@ class App extends React.Component {
                   </button>
                 ))}
               </div>
+              {cur.sel.copies.length > 0 && (
+              <div className="scr" role="group" aria-label="Exemplaires" style={s('display:flex;gap:6px;overflow-x:auto')}>
+                {cur.sel.copies.map(c => <button key={c.c} onClick={c.onClick} aria-pressed={c.on} style={s(`flex:none;height:36px;padding:0 12px;border-radius:18px;border:0;background:${c.bg};color:${c.color};font:700 13px 'DM Sans';cursor:pointer;display:flex;gap:6px;align-items:center;white-space:nowrap`)}>{c.label}{c.info && <span style={s(`font:600 11px 'DM Sans';opacity:.75`)}>{c.info}</span>}</button>)}
+              </div>
+              )}
               {cur.sel.hasRows && (
               <div style={s(`border-radius:24px;padding:12px 12px 12px 18px;background:${t.surface};box-shadow:0 8px 24px -12px ${t.shadow};display:flex;align-items:center;gap:12px`)}>
                 <div style={s('flex:1;min-width:0')}>
@@ -901,6 +1029,7 @@ class App extends React.Component {
               )}
             </div>
 
+            {cur.sel.diag.length > 0 && <Diagram lines={cur.sel.diag} yarns={cur.yarns} current={cur.sel.diagCur} t={t} />}
             <div style={s('display:flex;flex-direction:column;gap:4px')}>
               {cur.sel.items.map((r, i) => r.isNote
                 ? <div key={i} style={s(`font-size:13px;font-style:italic;color:${t.muted};padding:4px 6px 4px 62px;line-height:1.4`)}>{r.text}</div>
@@ -908,7 +1037,10 @@ class App extends React.Component {
                 <div key={i} onClick={r.onClick} style={s(`cursor:pointer;display:flex;gap:10px;align-items:flex-start;padding:11px 12px 11px 8px;border-radius:16px;background:${r.bg};color:${r.color}`)}>
                   <span style={s(`flex:none;min-width:48px;text-align:center;font:700 13px 'DM Sans';padding:4px 6px;border-radius:10px;background:${r.labelBg}`)}>{r.label}</span>
                   <span style={s('flex:1;display:flex;flex-direction:column;gap:6px')}>
-                    <span style={s(`font-size:15px;line-height:1.4;text-decoration:${r.deco};text-wrap:pretty`)}><span style={s(`display:${r.dotDisplay};width:11px;height:11px;border-radius:6px;background:${r.dot};margin-right:6px;vertical-align:-1px`)}></span>{r.text}</span>
+                    <span style={s(`font-size:15px;line-height:${r.segs.length > 1 ? 1.85 : 1.4};text-decoration:${r.deco};text-wrap:pretty`)}>{r.segs.map((sg, k) => <React.Fragment key={k}>
+                      {sg.name && <span style={s(`display:inline-flex;align-items:center;gap:5px;padding:0 8px 0 5px;margin-right:5px;border-radius:9px;background:${t.chip};color:${t.ink};font:600 12px/20px 'DM Sans';white-space:nowrap;vertical-align:1px`)}><span aria-hidden="true" style={s(`width:12px;height:12px;border-radius:6px;background:${sg.hex};box-shadow:0 0 0 1px ${t.muted}`)}></span>{sg.name}</span>}
+                      {sg.text && <span style={s(sg.hex && r.segs.length > 1 ? `border-bottom:2px solid ${sg.hex}` : '')}>{sg.text.replace(/(\d) (?=[a-zà-ÿ])/gi, '$1 ')}</span>}{k < r.segs.length - 1 ? ' ' : ''}
+                    </React.Fragment>)}</span>
                     <span style={s(`display:${r.subDisplay};gap:4px;align-items:center`)}>
                       {r.ticks.map((tk, j) => <span key={j} title={tk.label} style={s(`font:700 10px 'DM Sans';padding:2px 6px;border-radius:7px;background:${tk.bg};color:${tk.color}`)}>{tk.label}</span>)}
                     </span>
@@ -952,7 +1084,7 @@ class App extends React.Component {
             </div>
             <div style={s('display:flex;flex-direction:column;gap:6px')}>
               <div style={s('display:flex;justify-content:space-between;align-items:baseline')}><span style={s(`font:600 13px 'DM Sans'`)}>Instructions</span><span style={s(`font:600 12px 'DM Sans';color:${t.muted}`)}>{ed.summary}</span></div>
-              <div style={s(`font-size:12px;line-height:1.45;color:${t.muted}`)}>Une ligne par tour : « T3 : *1 ms, 1 aug* x6 (18) ». Noms de pièce en MAJUSCULES. Les autres lignes deviennent des notes.</div>
+              <div style={s(`font-size:12px;line-height:1.45;color:${t.muted}`)}>Une ligne par tour : « T3 : [1 ms, 1 aug] x6 (18) ». Noms de pièce en MAJUSCULES. Les autres lignes deviennent des notes.</div>
               <textarea value={ed.raw} onChange={ed.onRaw} aria-label="Instructions" style={s(`width:100%;min-height:340px;resize:vertical;border:0;border-radius:18px;padding:14px;background:${t.surface};color:${t.ink};font:400 13px/1.6 ui-monospace,Menlo,monospace;outline:none`)}></textarea>
             </div>
           </div>
@@ -1099,6 +1231,43 @@ class App extends React.Component {
                 ))}
               </div>
             </>)}
+            {imp.isTxt && (<>
+              <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:4px')}>
+                {backBtn('‹ Sources', v.impBack)}
+                <span style={s(`font:700 16px 'Bricolage Grotesque',sans-serif`)}>Fichier Maille</span><span style={{ width: 80 }}></span>
+              </div>
+              {!imp.fm && (
+                <div style={s(`border-radius:24px;padding:18px;background:${t.surface};display:flex;flex-direction:column;gap:12px`)}>
+                  <div style={s(`font:700 18px 'Bricolage Grotesque',sans-serif`)}>Choisissez un fichier texte</div>
+                  <div style={s(`font-size:13px;line-height:1.5;color:${t.muted}`)}>Un fichier .txt avec un ou plusieurs patterns. Vous pouvez relire et modifier le texte avant de l’ajouter.</div>
+                  <button onClick={imp.pickTxt} style={s(`height:52px;border-radius:26px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 15px 'DM Sans';cursor:pointer`)}>Choisir un fichier</button>
+                </div>
+              )}
+              {imp.fm && (<>
+                <div style={s('display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px')}>
+                  <span style={s(`flex:1;min-width:0;font:600 13px 'DM Sans';color:${t.muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`)}>{imp.fm.name}</span>
+                  <button onClick={imp.pickTxt} style={s(`flex:none;height:36px;padding:0 14px;border-radius:18px;border:0;background:${t.chip};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>Changer</button>
+                </div>
+                {imp.fmBlocks.map((b, i) => (
+                  <div key={i} style={s(`flex:none;border-radius:18px;padding:10px 12px;background:${t.surface};display:flex;flex-direction:column;gap:10px`)}>
+                    <div style={s('display:flex;gap:10px;align-items:center')}>
+                      <button onClick={b.toggle} role="checkbox" aria-checked={b.on} aria-disabled={!b.ok} style={s(`flex:1;min-width:0;cursor:${b.ok ? 'pointer' : 'default'};border:0;padding:0;background:transparent;text-align:left;color:${t.ink};display:flex;gap:12px;align-items:center`)}>
+                        <span style={s(`flex:none;width:26px;height:26px;border-radius:9px;border:2px solid ${b.boxBorder};background:${b.boxBg};color:#2a2233;display:flex;align-items:center;justify-content:center;font:700 14px 'DM Sans'`)}>{b.on ? '✓' : ''}</span>
+                        <span style={s('flex:1;min-width:0;display:flex;flex-direction:column;gap:3px')}>
+                          <span style={s(`font:700 15px 'DM Sans'`)}>{b.name}</span>
+                          <span style={s(`font-size:12px;color:${t.muted}`)}>{b.meta}</span>
+                          <span style={s('display:flex;gap:3px')}>{b.yarnDots.map((y, j) => <span key={j} title={y.name} style={s(`width:11px;height:11px;border-radius:6px;background:${y.hex}`)}></span>)}</span>
+                        </span>
+                      </button>
+                      <button onClick={b.toggleOpen} aria-expanded={b.open} style={s(`flex:none;height:36px;padding:0 14px;border-radius:18px;border:0;background:${t.chip};color:${t.ink};font:600 13px 'DM Sans';cursor:pointer`)}>{b.open ? 'Fermer' : 'Modifier'}</button>
+                    </div>
+                    {b.open && <textarea value={b.raw} onChange={b.onRaw} aria-label={`Texte de ${b.name}`} style={s(`width:100%;min-height:300px;resize:vertical;border:0;border-radius:14px;padding:12px;background:${t.chip};color:${t.ink};font:400 13px/1.6 ui-monospace,Menlo,monospace;outline:none`)}></textarea>}
+                  </div>
+                ))}
+                <button onClick={imp.fmAdd} style={s(`height:56px;flex:none;border-radius:28px;border:0;background:${imp.fmCtaBg};color:${imp.fmCtaColor};font:700 16px 'DM Sans';cursor:pointer`)}>{imp.fmCta}</button>
+              </>)}
+              {imp.fmErr && <div role="alert" style={s(`font-size:13px;line-height:1.4;border-radius:14px;padding:10px 12px;background:oklch(0.9 0.08 60);color:#4a2e10`)}>{imp.fmErr}</div>}
+            </>)}
             {imp.isPdf && (<>
               <div style={s('display:flex;justify-content:space-between;align-items:center;margin-top:4px')}>
                 {backBtn('‹ Sources', v.impBack)}
@@ -1153,7 +1322,6 @@ class App extends React.Component {
                   <div style={s(`font:700 18px 'Bricolage Grotesque',sans-serif`)}>Photographiez la page du pattern</div>
                   <div style={s(`font-size:13px;line-height:1.5;color:${t.muted}`)}>Page à plat, bien éclairée, sans ombre. Le texte est lu automatiquement, puis vous le vérifiez avant d’enregistrer.</div>
                   <button onClick={imp.pickPhoto} style={s(`height:52px;border-radius:26px;border:0;background:oklch(0.75 0.15 350);color:#2a2233;font:700 15px 'DM Sans';cursor:pointer`)}>Choisir une photo</button>
-                  <button onClick={imp.useExample} style={s(`height:46px;border-radius:23px;border:0;background:${t.chip};color:${t.ink};font:600 14px 'DM Sans';cursor:pointer`)}>Essayer avec « Les petits pois »</button>
                 </div>
               )}
               {imp.hasPhoto && (<>

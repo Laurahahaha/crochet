@@ -2,7 +2,7 @@
 // The app's files are served from the phone's cache, then refreshed in the
 // background, so a new version appears on the next launch after an update.
 // Bump VERSION only if you need to force everyone to drop the old cache.
-const VERSION = 'maille-v2';
+const VERSION = 'maille-v3';
 const CORE = [
   './',
   'index.html',
@@ -12,7 +12,6 @@ const CORE = [
   'vendor/babel.min.js',
   'vendor/pdf.min.js',
   'vendor/pdf.worker.min.js',
-  'assets/petits-pois.jpg',
   'icons/icon-192.png',
   'icons/icon-512.png',
   'icons/apple-touch-icon.png',
